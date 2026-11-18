@@ -1,0 +1,39 @@
+{
+  "ir_version": "0.1.0",
+  "source": "example: a script that syncs new shop orders into a CRM and a database",
+  "nodes": [
+    { "id": "py:order_sync", "kind": "module", "name": "order_sync",
+      "loc": { "file": "order_sync.py" }, "frontend": "python", "confidence": "exact" },
+    { "id": "py:order_sync.main", "kind": "function", "name": "main",
+      "loc": { "file": "order_sync.py", "line": 30, "end_line": 41 }, "frontend": "python" },
+    { "id": "py:order_sync.fetch_orders", "kind": "function", "name": "fetch_orders",
+      "loc": { "file": "order_sync.py", "line": 8, "end_line": 14 }, "frontend": "python" },
+    { "id": "py:order_sync.push_to_crm", "kind": "function", "name": "push_to_crm",
+      "loc": { "file": "order_sync.py", "line": 17, "end_line": 27 }, "frontend": "python" },
+    { "id": "py:order_sync.Order", "kind": "data_type", "name": "Order",
+      "loc": { "file": "order_sync.py", "line": 3, "end_line": 6 }, "frontend": "python",
+      "attrs": { "fields": ["id", "customer_email", "total"] } },
+    { "id": "http:shop.example.com/api/orders", "kind": "external", "name": "Shop orders API",
+      "frontend": "python", "confidence": "inferred", "attrs": { "method": "GET" } },
+    { "id": "http:crm.example.com/api/deals", "kind": "external", "name": "CRM deals API",
+      "frontend": "python", "confidence": "inferred", "attrs": { "method": "POST" } },
+    { "id": "sql:orders", "kind": "store", "name": "orders table", "frontend": "python" },
+    { "id": "bin:sync_helper!0x401136", "kind": "function", "name": "checksum",
+      "loc": { "file": "sync_helper", "address": "0x401136" }, "frontend": "elf", "confidence": "inferred" }
+  ],
+  "edges": [
+    { "from": "py:order_sync", "to": "py:order_sync.main", "kind": "defines" },
+    { "from": "py:order_sync", "to": "py:order_sync.fetch_orders", "kind": "defines" },
+    { "from": "py:order_sync", "to": "py:order_sync.push_to_crm", "kind": "defines" },
+    { "from": "py:order_sync", "to": "py:order_sync.Order", "kind": "defines" },
+    { "from": "py:order_sync.main", "to": "py:order_sync.fetch_orders", "kind": "calls",
+      "loc": { "file": "order_sync.py", "line": 32 } },
+    { "from": "py:order_sync.main", "to": "py:order_sync.push_to_crm", "kind": "calls",
+      "loc": { "file": "order_sync.py", "line": 35 } },
+    { "from": "py:order_sync.fetch_orders", "to": "http:shop.example.com/api/orders", "kind": "reads" },
+    { "from": "py:order_sync.push_to_crm", "to": "http:crm.example.com/api/deals", "kind": "sends_to",
+      "attrs": { "payload_type": "py:order_sync.Order" } },
+    { "from": "py:order_sync.main", "to": "sql:orders", "kind": "writes", "confidence": "observed" },
+    { "from": "py:order_sync.main", "to": "bin:sync_helper!0x401136", "kind": "calls", "confidence": "inferred" }
+  ]
+}
