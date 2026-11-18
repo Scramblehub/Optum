@@ -1,0 +1,3 @@
+#include "optum/version.hpp"
+
+std::string_view optum::version() { return "@PROJECT_VERSION@"; }
