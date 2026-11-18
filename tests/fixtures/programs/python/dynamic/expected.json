@@ -1,0 +1,40 @@
+{
+  "ir_version": "0.1.0",
+  "source": "tests/fixtures/programs/python/dynamic",
+  "nodes": [
+    {"id": "py:plugins", "kind": "module", "name": "plugins", "frontend": "python"},
+    {"id": "py:plugins.handler", "kind": "function", "name": "handler", "frontend": "python"},
+    {"id": "py:plugins.handler.register", "kind": "function", "name": "register", "frontend": "python"},
+    {"id": "py:plugins.do_refund", "kind": "function", "name": "do_refund", "frontend": "python"},
+    {"id": "py:plugins.do_charge", "kind": "function", "name": "do_charge", "frontend": "python"},
+    {"id": "py:plugins.apply", "kind": "function", "name": "apply", "frontend": "python"},
+    {"id": "py:plugins.Ops", "kind": "data_type", "name": "Ops", "frontend": "python"},
+    {"id": "py:plugins.Ops.double", "kind": "function", "name": "double", "frontend": "python"},
+    {"id": "py:plugins.Ops.run", "kind": "function", "name": "run", "frontend": "python"},
+    {"id": "py:plugins.each", "kind": "function", "name": "each", "frontend": "python"},
+    {"id": "py:plugins.main", "kind": "function", "name": "main", "frontend": "python"}
+  ],
+  "edges": [
+    {"from": "py:plugins", "to": "py:plugins.handler", "kind": "defines"},
+    {"from": "py:plugins", "to": "py:plugins.do_refund", "kind": "defines"},
+    {"from": "py:plugins", "to": "py:plugins.do_charge", "kind": "defines"},
+    {"from": "py:plugins", "to": "py:plugins.apply", "kind": "defines"},
+    {"from": "py:plugins", "to": "py:plugins.Ops", "kind": "defines"},
+    {"from": "py:plugins", "to": "py:plugins.each", "kind": "defines"},
+    {"from": "py:plugins", "to": "py:plugins.main", "kind": "defines"},
+    {"from": "py:plugins.handler", "to": "py:plugins.handler.register", "kind": "defines"},
+    {"from": "py:plugins.Ops", "to": "py:plugins.Ops.double", "kind": "defines"},
+    {"from": "py:plugins.Ops", "to": "py:plugins.Ops.run", "kind": "defines"},
+    {"from": "py:plugins", "to": "py:plugins.handler", "kind": "calls"},
+    {"from": "py:plugins", "to": "py:plugins.main", "kind": "calls"},
+    {"from": "py:plugins", "to": "py:plugins.handler.register", "kind": "calls", "attrs": {"difficulty": "hard"}},
+    {"from": "py:plugins.apply", "to": "py:plugins.do_refund", "kind": "calls", "attrs": {"difficulty": "hard"}},
+    {"from": "py:plugins.apply", "to": "py:plugins.do_charge", "kind": "calls", "attrs": {"difficulty": "hard"}},
+    {"from": "py:plugins.Ops.run", "to": "py:plugins.Ops.double", "kind": "calls", "attrs": {"difficulty": "hard"}},
+    {"from": "py:plugins.each", "to": "py:plugins.do_charge", "kind": "calls", "attrs": {"difficulty": "hard"}},
+    {"from": "py:plugins.main", "to": "py:plugins.apply", "kind": "calls"},
+    {"from": "py:plugins.main", "to": "py:plugins.Ops", "kind": "calls"},
+    {"from": "py:plugins.main", "to": "py:plugins.Ops.run", "kind": "calls"},
+    {"from": "py:plugins.main", "to": "py:plugins.each", "kind": "calls"}
+  ]
+}

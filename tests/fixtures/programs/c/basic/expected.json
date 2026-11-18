@@ -1,0 +1,24 @@
+{
+  "ir_version": "0.1.0",
+  "source": "tests/fixtures/programs/c/basic",
+  "nodes": [
+    {"id": "c:main.c", "kind": "module", "name": "c", "frontend": "c"},
+    {"id": "c:main.c#square", "kind": "function", "name": "square", "frontend": "c"},
+    {"id": "c:main.c#add", "kind": "function", "name": "add", "frontend": "c"},
+    {"id": "c:main.c#sum_squares", "kind": "function", "name": "sum_squares", "frontend": "c"},
+    {"id": "c:main.c#apply", "kind": "function", "name": "apply", "frontend": "c"},
+    {"id": "c:main.c#main", "kind": "function", "name": "main", "frontend": "c"}
+  ],
+  "edges": [
+    {"from": "c:main.c", "to": "c:main.c#square", "kind": "defines"},
+    {"from": "c:main.c", "to": "c:main.c#add", "kind": "defines"},
+    {"from": "c:main.c", "to": "c:main.c#sum_squares", "kind": "defines"},
+    {"from": "c:main.c", "to": "c:main.c#apply", "kind": "defines"},
+    {"from": "c:main.c", "to": "c:main.c#main", "kind": "defines"},
+    {"from": "c:main.c#sum_squares", "to": "c:main.c#add", "kind": "calls"},
+    {"from": "c:main.c#sum_squares", "to": "c:main.c#square", "kind": "calls"},
+    {"from": "c:main.c#apply", "to": "c:main.c#square", "kind": "calls", "attrs": {"difficulty": "hard"}},
+    {"from": "c:main.c#main", "to": "c:main.c#sum_squares", "kind": "calls"},
+    {"from": "c:main.c#main", "to": "c:main.c#apply", "kind": "calls"}
+  ]
+}

@@ -75,12 +75,12 @@ Each line is a branch. Size is a rough guess for part-time solo work.
 |---|---|---|
 | `feat/ir-core` | IR types in C++, JSON Schema, load/save, merge two graphs, `docs/ir.md` | 1 week |
 | `perf/ir-json` | Streaming JSON reader/writer (e.g. simdjson or a SAX parser) and lighter node storage; target: the 1M-node graph loads in under 2 s and 1 GB | 3–4 days |
-| `feat/fixtures` | 6–10 small programs in `tests/fixtures/`, each with a hand-written expected graph | 2–3 days, then ongoing |
+| `feat/fixtures` | 7 sample programs (6 Python, 1 C) with hand-checked expected graphs, conventions in `docs/frontends.md`, and `optum score` (precision/recall per edge kind, hard edges separately) | done; add more as frontends grow |
 | `feat/frontend-python` | tree-sitter integration; modules, functions, calls, imports, HTTP calls (`requests`, `httpx`) as `external` | 1–2 weeks |
 | `feat/export` | Graphviz DOT, Mermaid and JSON export; `optum graph <path> --format svg` | 2 days |
 | `feat/frontend-protocol` | The subprocess adapter protocol for external adapters (built-in frontends use the same C++ interface in-process); ship one sample adapter written in Python to prove a non-C++ adapter works | 4–5 days |
 | `feat/frontend-js` | JS/TS via tree-sitter, through the protocol | 1 week |
-| `feat/trace-verify` | Run a fixture, record which functions actually call which (a Python tracer for Python, `-finstrument-functions` for C), compare with the static graph, report precision and recall | 1 week |
+| `feat/trace-verify` | Run a fixture, record which functions actually call which (a Python tracer for Python, `-finstrument-functions` for C), compare with the static graph, report precision and recall. Ignore class-body frames: they look like calls but aren't | 1 week |
 | `feat/viewer` | A local web page: pan, zoom, filter by module or edge type, click through to source | 1 week |
 | `exp/frontend-binary` | ELF symbols and disassembly to a call graph for small C programs compiled with gcc; compare with the graph from the same C source | 1–2 weeks, a spike |
 

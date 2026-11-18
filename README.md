@@ -26,6 +26,7 @@ Commands:
 | `optum graph <path>` | Break code down into a graph (JSON). Empty until the first frontend lands |
 | `optum check <files...>` | Validate graph files; errors name the exact field |
 | `optum merge <files...> [-o out.json]` | Merge graphs by node id |
+| `optum score <expected> <produced>` | Precision and recall of a produced graph against a hand-checked one |
 
 The graph format is documented in [docs/ir.md](docs/ir.md). Schema tests need `pip install jsonschema`.
 
