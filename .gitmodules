@@ -1,0 +1,12 @@
+[submodule "External_Libraries/json"]
+	path = External_Libraries/json
+	url = https://github.com/nlohmann/json.git
+	shallow = true
+[submodule "External_Libraries/CLI11"]
+	path = External_Libraries/CLI11
+	url = https://github.com/CLIUtils/CLI11.git
+	shallow = true
+[submodule "External_Libraries/Catch2"]
+	path = External_Libraries/Catch2
+	url = https://github.com/catchorg/Catch2.git
+	shallow = true
