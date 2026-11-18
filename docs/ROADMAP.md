@@ -12,16 +12,14 @@
 Each phase ends with a gate: a result you can show someone. Don't start the next phase until the
 gate passes. Missing it means the plan changes, not that you push harder.
 
-## Decisions to make in week 1
+## Decisions (made 2026-11-18)
 
-These shape everything after them. My recommendation follows each one.
+Recorded in `docs/decisions/`:
 
-| Decision | Recommendation | Why |
-|---|---|---|
-| Implementation language for Optum | **Python 3.12** | Fastest for one person; the standard library parses Python; good bindings for tree-sitter, capstone and networkx |
-| What "a program" means at first | **Source code first, binaries second** | Company glue is mostly scripts, workflow configs and SQL, not compiled binaries. Binaries are a much harder research problem; do them once the graph model has been proven on source |
-| The shared graph format (the "IR") | **Typed JSON, versioned, documented in `docs/ir.md`** | Every frontend, internal or external, writes the same format. That format is the communication layer |
-| How to define "graphed perfectly" | **Measured against ground truth:** hand-checked graphs for fixtures, plus runtime traces | "Perfect" can't be a gate unless it's a number |
+1. **C++20 core** with CMake; dependencies pinned as git submodules in `External_Libraries/` ([0001](decisions/0001-implementation-language-cpp.md))
+2. **Source code first, binaries second** ([0002](decisions/0002-source-before-binaries.md))
+3. **Versioned JSON graph format**, which doubles as the language for external adapters and agents; a human-readable layer comes later ([0003](decisions/0003-json-graph-format.md))
+4. **Accuracy measured on fixtures; realism from the field:** the test company mimics a real interviewed business ([0004](decisions/0004-measuring-graph-accuracy.md))
 
 ## The system graph (the IR)
 
@@ -44,10 +42,11 @@ A frontend reads one kind of artifact and writes IR.
 
 | Frontend | Reads | Built on |
 |---|---|---|
-| Python | `.py` source | the standard library's `ast` module |
+| Python | `.py` source | tree-sitter + `tree-sitter-python` |
 | JavaScript / TypeScript | `.js`, `.ts` | tree-sitter grammars |
-| SQL | schemas and queries | `sqlglot` |
-| Binary (ELF, x86-64) | compiled programs | `pyelftools` and `capstone`; Ghidra headless later if needed |
+| C / C++ | source | tree-sitter grammars; libclang later if types are needed |
+| SQL | schemas and queries | tree-sitter SQL grammar |
+| Binary (ELF, x86-64) | compiled programs | own ELF reader or LIEF, plus capstone; Ghidra headless later if needed |
 | Workflow configs | n8n / Node-RED JSON exports | hand-written: they are already graphs |
 | **External protocol** | anything | any program that writes IR JSON to stdout |
 
@@ -67,25 +66,26 @@ Each line is a branch. Size is a rough guess for part-time solo work.
 | Branch | Job | Size |
 |---|---|---|
 | `main` (direct) | Repo, layout, this roadmap | done |
-| `feat/skeleton` | `pyproject.toml`, package `Core/optum/`, CLI entry point `optum`, pytest, ruff, GitHub Actions CI | 1–2 days |
-| `docs/decisions` | Write records 0001–0004 for the decisions above | half a day |
+| `docs/decisions` | Records 0001–0004 | done |
+| `feat/skeleton` | CMake build, `Core/` library + `optum` CLI, submodules (nlohmann/json, CLI11, Catch2), tests, GitHub Actions CI with sanitizers | 2–3 days |
 
 ### Phase 1: Break down (weeks 2–7)
 
 | Branch | Job | Size |
 |---|---|---|
-| `feat/ir-core` | IR data classes, JSON schema, load/save, merge two graphs, `docs/ir.md` | 3–4 days |
+| `feat/ir-core` | IR types in C++, JSON Schema, load/save, merge two graphs, `docs/ir.md` | 1 week |
 | `feat/fixtures` | 6–10 small programs in `tests/fixtures/`, each with a hand-written expected graph | 2–3 days, then ongoing |
-| `feat/frontend-python` | Modules, functions, calls, imports, HTTP calls (`requests`, `httpx`) as `external` | 1 week |
+| `feat/frontend-python` | tree-sitter integration; modules, functions, calls, imports, HTTP calls (`requests`, `httpx`) as `external` | 1–2 weeks |
 | `feat/export` | Graphviz DOT, Mermaid and JSON export; `optum graph <path> --format svg` | 2 days |
-| `feat/frontend-protocol` | The subprocess adapter protocol; port the Python frontend onto it | 3–4 days |
+| `feat/frontend-protocol` | The subprocess adapter protocol for external adapters (built-in frontends use the same C++ interface in-process); ship one sample adapter written in Python to prove a non-C++ adapter works | 4–5 days |
 | `feat/frontend-js` | JS/TS via tree-sitter, through the protocol | 1 week |
-| `feat/trace-verify` | Run a fixture, record which functions actually call which, compare with the static graph, report precision and recall | 4–5 days |
+| `feat/trace-verify` | Run a fixture, record which functions actually call which (a Python tracer for Python, `-finstrument-functions` for C), compare with the static graph, report precision and recall | 1 week |
 | `feat/viewer` | A local web page: pan, zoom, filter by module or edge type, click through to source | 1 week |
 | `exp/frontend-binary` | ELF symbols and disassembly to a call graph for small C programs compiled with gcc; compare with the graph from the same C source | 1–2 weeks, a spike |
 
 **Gate v0.1:** run `optum graph` on a real mixed-language repo (Python plus JS, about 10k lines)
-and get a navigable graph. On the fixtures: call-edge precision ≥ 95% and recall ≥ 90%
+and get a navigable graph. Speed check: a 1M-line Python codebase graphed in under a minute on
+this machine (32 cores). On the fixtures: call-edge precision ≥ 95% and recall ≥ 90%
 against the hand-checked graphs, with the trace check agreeing. The binary spike has a written
 result, even if the result is "not yet".
 
@@ -106,11 +106,11 @@ automatic rewrite merges with all tests still passing.
 
 ### Phase 3: Unify (weeks 13–16, can stretch to 24)
 
-This is the "test company" from section 11 of the concept doc, kept small.
+This is the "test company" from section 11 of the concept doc, kept small, and modeled on a real business from the interviews (see [0004](decisions/0004-measuring-graph-accuracy.md)): the same kinds of tools and the same glue, swapped for open-source stand-ins.
 
 | Branch | Job | Size |
 |---|---|---|
-| `feat/testco` | Docker Compose with 3–4 open-source tools (e.g. Odoo, a help desk, n8n with glue workflows) and a data generator | 1 week |
+| `feat/testco` | Docker Compose with open-source stand-ins for the interviewed company's tools (e.g. Odoo for ERP, a help desk, n8n for its glue) and a data generator | 1–2 weeks |
 | `feat/frontend-saas` | Adapters reading those tools' APIs, schemas and n8n workflows into IR | 1–2 weeks |
 | `feat/unified-model` | Merge the per-tool graphs into one company graph: shared entities, one flow (e.g. order-to-cash) | 1 week |
 | `feat/generate-one-flow` | Generate a small owned service that replaces the glue for that one flow | 1–2 weeks |
@@ -122,8 +122,8 @@ are reported.
 
 ## Alongside the code
 
-- **Interviews (concept doc section 11).** One or two conversations a month with operations
-  heads or CTOs during Phases 1–2. They cost little, and they tell you whether Phase 3 should
+- **Interviews (concept doc section 11).** First one by mid-December 2026, using the checklist
+  in [0004](decisions/0004-measuring-graph-accuracy.md); then one or two a month during Phases 1–2. They cost little, and they tell you whether Phase 3 should
   target the right flow. The concept doc's business case rests on the replaceable share of SaaS
   spend, and only those conversations can measure it.
 - **CGL.** Reuse from `~/Projects/AI` deliberately: copy or depend on a specific piece when a
@@ -136,5 +136,6 @@ are reported.
 |---|---|
 | Binary decompilation swallows months | Keep it as a time-boxed `exp/` spike; source frontends carry the gates |
 | The IR keeps changing and breaks every frontend | Version it; fixtures with expected graphs catch breakage at once |
+| C++ slows early progress |  Keep branches small; lean on tree-sitter and libraries instead of writing parsers |
 | "Perfect graph" never feels done | The gate is the precision/recall number, not a feeling |
 | The viewer turns into a front-end project | Use an off-the-shelf graph library (Cytoscape.js); no custom rendering |
