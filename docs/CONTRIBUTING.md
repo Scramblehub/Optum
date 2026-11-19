@@ -4,7 +4,8 @@ Kept short on purpose. Change it when it stops fitting.
 
 ## Branches
 
-- `main` always builds cleanly (no warnings) and passes its tests, including the `asan` preset. No direct commits once Phase 0 is done.
+- `main` always builds cleanly (no warnings) and passes its tests, including the `asan` preset.
+  Nobody pushes to `main` directly: every change arrives through a pull request.
 - One branch per job from the roadmap, named by kind:
   - `feat/<name>`: a new capability, e.g. `feat/frontend-python` (a C++ frontend that reads Python)
   - `fix/<name>`: a bug fix
@@ -15,6 +16,28 @@ Kept short on purpose. Change it when it stops fitting.
 - Merge through a pull request, even working alone. The PR description is the record of why.
 - Messy first, clean later: a branch may merge rough, as long as `main` still passes its tests and
   the roughness is noted in the PR.
+
+## Working together
+
+The repo is owned by Scramblehub. These rules are agreed, not enforced: on GitHub's free plan
+a private repo can't lock `main`. If the repo moves to GitHub Pro, they become a ruleset.
+
+1. **Never push to `main`.** Create a branch (named as above), push it, open a pull request.
+2. **Pull requests from Scramblehub** may be merged by Scramblehub without a review.
+3. **Pull requests from anyone else need Scramblehub's approval on their latest commit** before
+   they're merged. The **Owner approval** check on the PR shows whether they have it. It turns
+   red again when new commits are pushed after an approval. Once approved, the author can merge.
+4. **CI must be green** (debug, asan and release) before anything is merged.
+5. **Other people's branches:** don't push to them without asking. Never force-push `main` or a
+   branch someone else is working on. Rewriting your own branch before review is fine.
+6. **Talk before big changes:** a new dependency, a change to the IR, anything that needs a
+   decision record. Open an issue or a draft PR first.
+7. **No secrets and no real customer data in the repo.** Samples and fixtures are made up.
+   `.env` and credential files stay out (see `.gitignore`).
+8. **Branches are deleted automatically after merge.** Start new work from an up-to-date `main`,
+   not from another feature branch.
+
+Pull requests opened by Claude Code run under Scramblehub's account and follow the same rules.
 
 ## C++ conventions
 
