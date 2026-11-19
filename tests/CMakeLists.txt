@@ -200,7 +200,7 @@ endif()
 
 # optum diagnose against its answer keys (docs/diagnose.md): planted findings, matched exactly.
 if(Python3_FOUND)
-  foreach(name crm_glue shared_table one_package unused dupes)
+  foreach(name crm_glue shared_table one_package unused dupes entities)
     set(dir ${FIXTURES}/programs/mixed/${name})
     set(out ${CMAKE_CURRENT_BINARY_DIR}/diagnosis_${name}.json)
     add_test(NAME diagnose_${name}

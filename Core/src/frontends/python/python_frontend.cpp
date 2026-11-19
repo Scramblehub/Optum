@@ -42,11 +42,12 @@ using frontends::to_upper;
 
 // A small, tree-free copy of the expressions we need to resolve later.
 struct Expr {
-  enum class Kind : std::uint8_t { Other, Name, Attr, Call, Str };
+  enum class Kind : std::uint8_t { Other, Name, Attr, Call, Str, Dict };
   Kind kind = Kind::Other;
   std::string text;       // Name: the identifier. Attr: the attribute.
   std::vector<Expr> sub;  // Attr: {object}. Call: {function}.
   // Str: literal pieces and holes; a hole holds the identifier inside {...}, or "" if complex.
+  // Dict: its string keys ({"email": ..., "name": ...}), as (false, key).
   std::vector<std::pair<bool, std::string>> parts;
 };
 
@@ -78,6 +79,7 @@ struct Def {
   std::unordered_map<std::string, Expr> defaults;  // functions: parameter default values
   std::vector<Expr> returns;                       // functions: returned expressions (first few)
   bool decorated = false;  // a decorator receives it as a value (registration, routes, fixtures)
+  std::vector<std::string> fields;  // classes: annotated class attributes (dataclass-style), in order
   std::vector<std::string> star_imports;
 };
 
@@ -353,7 +355,8 @@ class Summarizer {
           const std::string kw = text(ts::field(a, "name"));
           Expr v = to_expr(ts::field(a, "value"));
           if (kw == "url") cs.url_kw = v;
-          if (v.kind == Expr::Kind::Name || v.kind == Expr::Kind::Attr || v.kind == Expr::Kind::Call) {
+          if (v.kind == Expr::Kind::Name || v.kind == Expr::Kind::Attr || v.kind == Expr::Kind::Call ||
+              (v.kind == Expr::Kind::Dict && (kw == "json" || kw == "data"))) {
             cs.kwargs.emplace_back(kw, std::move(v));
           }
           return;
@@ -375,6 +378,10 @@ class Summarizer {
     const TSNode right = ts::field(n, "right");
     std::optional<Expr> value;
     if (ts::is(left, "identifier") && !ts_node_is_null(right)) value = to_expr(right);
+    // An annotated class attribute (`email: str`, dataclasses, pydantic): a field of the class.
+    if (ts::is(left, "identifier") && def(ds).kind == DefKind::Class && !ts_node_is_null(ts::field(n, "type"))) {
+      def(ds).fields.push_back(text(left));
+    }
     // A class attribute (`_address_class = IPv4Address` in a class body): read through self too.
     if (ts::is(left, "identifier") && !ts_node_is_null(right) && def(ds).kind == DefKind::Class) {
       auto& vals = def(ds).attr_values[text(left)];
@@ -493,6 +500,13 @@ class Summarizer {
       e.kind = Expr::Kind::Str;
       ts::for_named(n, [&](TSNode s) {
         if (ts::is(s, "string")) add_string_parts(s, e);
+      });
+    } else if (t == "dictionary") {
+      e.kind = Expr::Kind::Dict;
+      ts::for_named(n, [&](TSNode pair) {
+        if (!ts::is(pair, "pair")) return;
+        const Expr k = to_expr(ts::field(pair, "key"));
+        if (k.kind == Expr::Kind::Str && k.parts.size() == 1 && !k.parts[0].first) e.parts.emplace_back(false, k.parts[0].second);
       });
     } else if (t == "parenthesized_expression" && ts_node_named_child_count(n) == 1) {
       return to_expr(ts_node_named_child(n, 0));
@@ -1281,7 +1295,14 @@ class Linker {
     auto store = [&](const std::string& table, EdgeKind kind) {
       Node n = sql_store_node(sql_store_id(table), table, "python");
       std::string to = n.id;  // copied first: argument evaluation order is unspecified
-      emit(id(cs.scope), std::move(to), kind, Confidence::Exact, cs.line, nlohmann::json::object(), std::move(n));
+      nlohmann::json attrs = nlohmann::json::object();
+      for (const auto& [tbl, cols] : t.columns) {
+        if (tbl == table) attrs["columns"] = cols;
+      }
+      for (const auto& [tbl, keys] : t.keys) {
+        if (tbl == table) attrs["keys"] = keys;  // declared PRIMARY KEY / UNIQUE: identity keys
+      }
+      emit(id(cs.scope), std::move(to), kind, Confidence::Exact, cs.line, std::move(attrs), std::move(n));
     };
     for (const auto& r : t.reads) store(r, EdgeKind::Reads);
     for (const auto& w : t.writes) store(w, EdgeKind::Writes);
@@ -1306,7 +1327,32 @@ class Linker {
     Node n = http_external_node(node_id, "python");
     const Confidence c = n.confidence;
     const std::string upper = to_upper(method);
-    emit(id(cs.scope), node_id, kind, c, cs.line, {{"method", upper}}, std::move(n));
+    nlohmann::json attrs = {{"method", upper}};
+    if (const auto fields = body_fields(cs); !fields.empty()) attrs["fields"] = fields;
+    emit(id(cs.scope), node_id, kind, c, cs.line, std::move(attrs), std::move(n));
+  }
+
+  // The keys of a request's JSON or form body: json={...}, data={...}, or a name bound to a dict.
+  std::vector<std::string> body_fields(const CallSite& cs) const {
+    for (const auto& [kw, v] : cs.kwargs) {
+      if (kw != "json" && kw != "data") continue;
+      const Expr* e = &v;
+      Expr bound;
+      if (v.kind == Expr::Kind::Name) {
+        const NameHit hit = p_.resolve_name(m_, cs.scope, v.text, 0);
+        if (hit.kind != NameHit::Kind::Local) continue;
+        const Def& d = mod_.defs[std::size_t(hit.scope)];
+        auto it = d.values.find(v.text);
+        if (it == d.values.end()) continue;
+        bound = it->second;
+        e = &bound;
+      }
+      if (e->kind != Expr::Kind::Dict) continue;
+      std::vector<std::string> keys;
+      for (const auto& [_, k] : e->parts) keys.push_back(k);
+      return keys;
+    }
+    return {};
   }
 };
 
@@ -1453,6 +1499,22 @@ Graph extract_python_files(const fs::path& root, const std::vector<fs::path>& re
       n.name = d == 0 ? m.name.substr(m.name.rfind('.') == std::string::npos ? 0 : m.name.rfind('.') + 1) : df.name;
       n.loc = SourceLoc{m.file, df.line, df.end_line, std::nullopt};
       n.frontend = "python";
+      if (d > 0 && df.kind == DefKind::Class) {
+        // Fields, for finding the same entity in several places (docs/frontends.md): annotated
+        // class attributes, then attributes set on self in any method.
+        std::vector<std::string> fields = df.fields;
+        std::vector<std::string> attrs_set;
+        for (const auto& [name, vals] : df.attr_values) {  // set on self in a method (not class-level)
+          if (std::any_of(vals.begin(), vals.end(), [&](const auto& v) { return v.first != static_cast<int>(d); })) {
+            attrs_set.push_back(name);
+          }
+        }
+        std::sort(attrs_set.begin(), attrs_set.end());
+        for (auto& a : attrs_set) {
+          if (std::find(fields.begin(), fields.end(), a) == fields.end()) fields.push_back(std::move(a));
+        }
+        if (fields.size() >= 2) n.attrs["fields"] = fields;
+      }
       if (d > 0) {
         // For the unused-code analysis (docs/frontends.md): is the name used anywhere else, and
         // can code outside the project reach it by name?

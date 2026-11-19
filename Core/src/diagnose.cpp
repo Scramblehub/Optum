@@ -1,6 +1,7 @@
 #include "optum/diagnose.hpp"
 
 #include "optum/clones.hpp"
+#include "optum/entities.hpp"
 #include "test_code.hpp"
 
 #include <algorithm>
@@ -265,6 +266,48 @@ Diagnosis diagnose(const Graph& g, const std::filesystem::path& source_root) {
   }
   unused_code(g, unit, d.findings);
 
+  // The same data in several places: classes, tables and API payloads with matching fields.
+  const EntityResult entities = find_entities(g);
+  if (!entities.regulated.empty()) {
+    std::map<std::string, std::vector<std::string>> by_kind;
+    for (const auto& r : entities.regulated) by_kind[r.regulated].push_back(r.id);
+    for (const auto& [kind, ids] : by_kind) {
+      std::string list;
+      for (std::size_t i = 0; i < ids.size() && i < 8; ++i) list += (i ? ", " : "") + std::string("`") + ids[i] + "`";
+      if (ids.size() > 8) list += ", ...";
+      d.notes.push_back(std::to_string(ids.size()) + " " + kind +
+                        " record shape(s) left out of \"the same data in several places\": regulated forms stay as "
+                        "they are, separately (" + list + ")");
+    }
+  }
+  for (const EntityGroup& eg : entities.groups) {
+    Finding f;
+    f.kind = "same_entity";
+    std::set<std::string> comps;
+    std::map<std::string, int> kinds;
+    nlohmann::json members = nlohmann::json::array();
+    for (const EntityShape& m : eg.members) {
+      f.targets.push_back(m.id);
+      ++kinds[m.kind];
+      for (const auto& u : m.users) {
+        if (auto i = g.find(u)) comps.insert(component_of(g.node(unit[*i])));
+      }
+      members.push_back({{"id", m.id}, {"kind", m.kind}, {"name", m.name}, {"fields", m.fields},
+                         {"normalized", m.normalized}, {"keys", m.keys}, {"used_by", m.users}});
+    }
+    f.units.assign(comps.begin(), comps.end());
+    f.confidence = "likely";
+    std::string where;
+    for (const auto& [k, n] : kinds) {
+      where += (where.empty() ? "" : ", ") + std::to_string(n) + " " +
+               (k == "class" ? (n == 1 ? "class" : "classes") : k == "table" ? (n == 1 ? "table" : "tables") : (n == 1 ? "API payload" : "API payloads"));
+    }
+    f.title = "`" + eg.name + "` is defined in " + std::to_string(eg.members.size()) + " places (" + where + ")";
+    f.evidence = {{"entity", eg.name}, {"similarity", std::round(eg.score * 100) / 100}, {"members", members},
+                  {"proposed_fields", eg.proposed}, {"basis", eg.basis}, {"basis_fields", eg.basis_fields}};
+    d.findings.push_back(std::move(f));
+  }
+
   // Duplicated logic: clone groups found from the source (docs/diagnose.md).
   std::error_code ec;
   if (!source_root.empty() && std::filesystem::exists(source_root, ec)) {
@@ -326,7 +369,7 @@ nlohmann::json to_json(const Diagnosis& d) {
                         {"targets", f.targets}, {"evidence", f.evidence}});
   }
   return {{"report_version", "0.1"}, {"source", d.source}, {"units", units},
-          {"reached", reached}, {"packages", d.packages}, {"findings", findings}};
+          {"reached", reached}, {"packages", d.packages}, {"findings", findings}, {"notes", d.notes}};
 }
 
 std::string to_markdown(const Diagnosis& d) {
@@ -366,6 +409,41 @@ std::string to_markdown(const Diagnosis& d) {
       o += "\n";
       continue;
     }
+    if (f.kind == "same_entity") {
+      o += "Kind: the same data in several places. Confidence: **" + f.confidence +
+           "**. One definition could replace them: `" + f.evidence["entity"].get<std::string>() + "` with ";
+      std::string proposed;
+      for (const auto& p : f.evidence["proposed_fields"]) proposed += (proposed.empty() ? "" : ", ") + p.get<std::string>();
+      std::string basis;
+      for (const auto& b : f.evidence["basis_fields"]) basis += (basis.empty() ? "" : ", ") + b.get<std::string>();
+      o += proposed + ". Matched by " +
+           (f.evidence["basis"] == "identity" ? "a shared identity key: " + basis
+                                              : "a temporary composite key (no shared id): " + basis) +
+           ".\n\n| Field |";
+      for (const auto& mj : f.evidence["members"]) o += " `" + mj["id"].get<std::string>() + "` (" + mj["kind"].get<std::string>() + ") |";
+      o += "\n|---|";
+      for (std::size_t i = 0; i < f.evidence["members"].size(); ++i) o += "---|";
+      o += "\n";
+      std::vector<std::string> rows;
+      for (const auto& mj : f.evidence["members"]) {
+        for (const auto& nf : mj["normalized"]) {
+          if (std::find(rows.begin(), rows.end(), nf.get<std::string>()) == rows.end()) rows.push_back(nf.get<std::string>());
+        }
+      }
+      for (const auto& r : rows) {
+        o += "| " + r + " |";
+        for (const auto& mj : f.evidence["members"]) {
+          std::string cell = "–";
+          for (std::size_t fi = 0; fi < mj["normalized"].size(); ++fi) {
+            if (mj["normalized"][fi] == r) cell = "`" + mj["fields"][fi].get<std::string>() + "`";
+          }
+          o += " " + cell + " |";
+        }
+        o += "\n";
+      }
+      o += "\n";
+      continue;
+    }
     if (f.kind == "duplicated_logic") {
       o += "Kind: duplicated logic (" + f.evidence["clone_type"].get<std::string>() + ", similarity " +
            std::to_string(static_cast<int>(std::lround(f.evidence["similarity"].get<double>() * 100))) +
@@ -397,6 +475,12 @@ std::string to_markdown(const Diagnosis& d) {
       }
       o += "\n";
     }
+    o += "\n";
+  }
+
+  if (!d.notes.empty()) {
+    o += "## Notes\n\n";
+    for (const auto& n : d.notes) o += "- " + n + "\n";
     o += "\n";
   }
 

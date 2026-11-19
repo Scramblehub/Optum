@@ -39,11 +39,11 @@ using frontends::to_upper;
 // ===================================================================== pass 1 data
 
 struct Expr {
-  enum class Kind : std::uint8_t { Other, Name, Member, Call, New, Str, This, Super, TypeRef, Require, RequirePattern };
+  enum class Kind : std::uint8_t { Other, Name, Member, Call, New, Str, This, Super, TypeRef, Require, RequirePattern, Object };
   Kind kind = Kind::Other;
   std::string text;       // Name: identifier. Member: property. Require: the module specifier.
   std::vector<Expr> sub;  // Member: {object}. Call: {function}. New: {constructor}. TypeRef: {type}.
-  // Str, RequirePattern: literal pieces and holes (identifier or "")
+  // Str, RequirePattern: literal pieces and holes (identifier or ""). Object: its keys, as (false, key).
   std::vector<std::pair<bool, std::string>> parts;
 };
 
@@ -93,6 +93,8 @@ struct CallSite {
   std::optional<Expr> first_arg;
   std::string method_option;  // fetch(url, { method: "POST" })
   std::vector<Expr> callbacks;  // arguments naming a function (a name or member), for callbacks
+  std::optional<Expr> body;        // a request body, axios-style: axios.post(url, body)
+  std::optional<Expr> fetch_body;  // fetch-style: fetch(url, { body: JSON.stringify(x) })
   std::uint32_t line = 0;
 };
 
@@ -561,10 +563,21 @@ class Summarizer {
         if (ts::is(arg, "comment")) return;
         if (i == 0) cs.first_arg = to_expr(arg);
         if (ts::is(arg, "identifier") || ts::is(arg, "member_expression")) cs.callbacks.push_back(to_expr(arg));
+        if (i == 1) cs.body = to_expr(arg);  // axios-style: the body itself
         if (i == 1 && ts::is(arg, "object")) {
           ts::for_named(arg, [&](TSNode p) {
             if (ts::is(p, "pair") && unquote(text(ts::field(p, "key"))) == "method") {
               if (auto m = string_from(ts::field(p, "value"))) cs.method_option = *m;
+            }
+            // fetch-style: { body: JSON.stringify(x) }
+            if (ts::is(p, "pair") && unquote(text(ts::field(p, "key"))) == "body") {
+              const TSNode v = ts::field(p, "value");
+              if (ts::is(v, "call_expression") && text(ts::field(v, "function")) == "JSON.stringify") {
+                const TSNode sargs = ts::field(v, "arguments");
+                if (!ts_node_is_null(sargs) && ts_node_named_child_count(sargs) >= 1) {
+                  cs.fetch_body = to_expr(ts_node_named_child(sargs, 0));
+                }
+              }
             }
           });
         }
@@ -648,6 +661,15 @@ class Summarizer {
         else if (ts::is(c, "template_substitution")) {
           const TSNode inner = ts_node_named_child(c, 0);
           e.parts.emplace_back(true, ts::is(inner, "identifier") ? text(inner) : "");
+        }
+      });
+    } else if (t == "object") {
+      e.kind = Expr::Kind::Object;
+      ts::for_named(n, [&](TSNode p) {
+        if (ts::is(p, "shorthand_property_identifier")) e.parts.emplace_back(false, text(p));
+        else if (ts::is(p, "pair")) {
+          const TSNode k = ts::field(p, "key");
+          if (ts::is(k, "property_identifier") || ts::is(k, "string")) e.parts.emplace_back(false, unquote(text(k)));
         }
       });
     } else if (t == "parenthesized_expression" || t == "await_expression" || t == "non_null_expression" ||
@@ -1312,7 +1334,14 @@ class Linker {
       std::string name = store_id.substr(4);  // without "sql:"
       Node n = sql_store_node(std::move(store_id), std::move(name), "js");
       std::string to = n.id;
-      emit(id(cs.attr), std::move(to), kind, Confidence::Exact, cs.line, nlohmann::json::object(), std::move(n));
+      nlohmann::json attrs = nlohmann::json::object();
+      for (const auto& [tbl, cols] : t.columns) {
+        if (tbl == table) attrs["columns"] = cols;
+      }
+      for (const auto& [tbl, keys] : t.keys) {
+        if (tbl == table) attrs["keys"] = keys;  // declared PRIMARY KEY / UNIQUE: identity keys
+      }
+      emit(id(cs.attr), std::move(to), kind, Confidence::Exact, cs.line, std::move(attrs), std::move(n));
     };
     for (const auto& r : t.reads) store(r, EdgeKind::Reads);
     for (const auto& w : t.writes) store(w, EdgeKind::Writes);
@@ -1343,7 +1372,29 @@ class Linker {
     Node n = http_external_node(node_id, "js");
     const Confidence c = n.confidence;
     const bool reads = method == "GET" || method == "HEAD" || method == "OPTIONS";
-    emit(id(cs.attr), node_id, reads ? EdgeKind::Reads : EdgeKind::SendsTo, c, cs.line, {{"method", method}}, std::move(n));
+    nlohmann::json attrs = {{"method", method}};
+    const std::optional<Expr>& body = fetch_style ? cs.fetch_body : cs.body;
+    if (!reads && body) {
+      if (const auto keys = object_keys(cs, *body); !keys.empty()) attrs["fields"] = keys;
+    }
+    emit(id(cs.attr), node_id, reads ? EdgeKind::Reads : EdgeKind::SendsTo, c, cs.line, std::move(attrs), std::move(n));
+  }
+
+  // The keys of an object literal, or of the one a local name is bound to.
+  std::vector<std::string> object_keys(const CallSite& cs, const Expr& e) const {
+    const Expr* obj = &e;
+    if (e.kind == Expr::Kind::Name) {
+      const NameHit hit = p_.resolve_name(m_, cs.scope, e.text, 0);
+      if (hit.kind != NameHit::Kind::Local) return {};
+      const Def& d = mod_.defs[std::size_t(hit.scope)];
+      auto it = d.values.find(e.text);
+      if (it == d.values.end()) return {};
+      obj = &it->second;
+    }
+    if (obj->kind != Expr::Kind::Object) return {};
+    std::vector<std::string> keys;
+    for (const auto& [_, k] : obj->parts) keys.push_back(k);
+    return keys;
   }
 };
 
@@ -1438,6 +1489,14 @@ Graph extract_js_files(const fs::path& root, const std::vector<fs::path>& rel_fi
       n.loc = SourceLoc{m.path, df.line, df.end_line, std::nullopt};
       n.frontend = "js";
       if (!df.accessor.empty()) n.attrs = {{"accessor", df.accessor}};
+      if (d > 0 && df.kind == DefKind::Class) {  // fields, for the same-entity analysis
+        std::vector<std::string> fields;
+        for (const auto& [name, _] : df.attr_values) {
+          if (!df.children.count(name)) fields.push_back(name);
+        }
+        std::sort(fields.begin(), fields.end());
+        if (fields.size() >= 2) n.attrs["fields"] = fields;
+      }
       if (d > 0) {
         // For the unused-code analysis (docs/frontends.md). Local: not exported from its file
         // (top level), inside a function, or a #private member.
