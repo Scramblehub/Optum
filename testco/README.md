@@ -29,8 +29,9 @@ python3 testco/observe/har_import.py session.har --tool 127.0.0.1:8069=accountin
 | Payments | stripe-mock 0.197 (Stripe's mock of its API; keeps no data, answers in Stripe's shape) | 12111 | kept |
 | Accounting and tax filing | Odoo 18 with Invoicing (database `testco`, login `admin` / `admin`) | 8069 | kept |
 | Automation glue | n8n 1.80 | 5678 | replaced in stage 1 |
+| Web shop | WooCommerce 9.4 on WordPress 6.7 (API: `admin` / `testcoShopApiPassword00`, a fixed test credential) | 8080 | replaced in stage 7 |
 
-The other seven (spreadsheets, forms, email marketing, scheduling, help desk, CRM, shop) come next.
+The other six (spreadsheets, forms, email marketing, scheduling, help desk, CRM) come next.
 
 ## The data
 
@@ -55,6 +56,8 @@ python3 testco/check_regulated.py verify     # later: exit 1 if any tax document
 
 - **Accounting** becomes a UK company (GBP, VAT 20% included in prices, as shop prices are), with
   its customers and 2,000 **posted** invoices; every total matches its order.
+- **Shop**: 8 products, its 302 customers and 2,000 completed orders (every total matches the
+  ground truth; the two John Smiths are two customers). WooCommerce is slow to load: ~8 minutes.
 - **Payments** (stripe-mock keeps nothing): 300 checkout calls, as recorded traffic.
 - `data/ids.json` maps each generated record to the id the live tool gave it, for checking what
   Optum finds against the ground truth. Optum never reads it, nor `ground_truth.json`.
