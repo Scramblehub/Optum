@@ -82,7 +82,7 @@ Each line is a branch. Size is a rough guess for part-time solo work.
 | `feat/frontend-js` | JS/TS via tree-sitter, through the protocol | 1 week |
 | `feat/trace-verify` | Run a fixture, record which functions actually call which (a Python tracer for Python, `-finstrument-functions` for C), compare with the static graph, report precision and recall. Ignore class-body frames: they look like calls but aren't | 1 week |
 | `feat/viewer` | A local web page: pan, zoom, filter by module or edge type, click through to source | 1 week |
-| `exp/frontend-binary` | ELF symbols and disassembly to a call graph for small C programs compiled with gcc; compare with the graph from the same C source | 1–2 weeks, a spike |
+| `feat/frontend-c` … `feat/bin-rules` | Binaries: 7 stages from the C source frontend and an ELF reader to CGL-style structure memory and verified identification. See [plans/binary.md](plans/binary.md) and [decision 0005](decisions/0005-binaries.md) | 9–13 weeks; stages 1–4 (C source, corpus, ELF reader, lifting) first, ~5 weeks |
 
 **Gate v0.1:** run `optum graph` on a real mixed-language repo (Python plus JS, about 10k lines)
 and get a navigable graph. Speed check: a 1M-line Python codebase graphed in under a minute on
