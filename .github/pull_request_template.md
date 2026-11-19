@@ -16,4 +16,4 @@
 - [ ] `cmake --build --preset asan && ctest --preset asan` passes locally
 - [ ] Docs updated if behaviour changed (`docs/`, README)
 - [ ] No secrets, credentials or real customer data
-- [ ] Not opened by Scramblehub? Wait for Scramblehub's approval (the **Owner approval** check) before merging
+- [ ] Not opened by Scramblehub? Scramblehub's approval of the latest commit is needed to merge
