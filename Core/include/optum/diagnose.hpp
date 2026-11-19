@@ -5,6 +5,7 @@
 // a kind, a confidence (certain: exact edges only; likely: some inferred edge involved) and its
 // evidence. Analyses add finding kinds; the first is overlapping glue.
 
+#include <filesystem>
 #include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
@@ -29,7 +30,7 @@ struct Target {  // something outside the code: an API, a SaaS service, a table,
 };
 
 struct Finding {
-  std::string kind;        // "overlapping_glue"
+  std::string kind;        // "overlapping_glue", "duplicated_logic"
   std::string title;
   std::string confidence;  // certain, likely
   std::vector<std::string> units;    // the units involved, sorted
@@ -50,7 +51,9 @@ struct Diagnosis {
   std::vector<Finding> findings;
 };
 
-Diagnosis diagnose(const Graph& g);
+// `source_root`: the analysed directory, for analyses that read source (duplicated logic). Empty
+// or missing: those analyses are skipped.
+Diagnosis diagnose(const Graph& g, const std::filesystem::path& source_root = {});
 nlohmann::json to_json(const Diagnosis& d);
 std::string to_markdown(const Diagnosis& d);
 
