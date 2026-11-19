@@ -65,6 +65,7 @@ struct Def {
   std::uint32_t line = 1, end_line = 1;
   std::string self_name;    // methods: name of the first parameter
   std::vector<Expr> bases;  // classes
+  std::optional<Expr> metaclass;  // classes: `metaclass=` in the class statement
   // Classes: values assigned to self.<attr> in methods, with the method's scope (first few only).
   std::unordered_map<std::string, std::vector<std::pair<int, Expr>>> attr_values;
   std::unordered_map<std::string, int> children;
@@ -257,6 +258,9 @@ class Summarizer {
     if (!ts_node_is_null(supers)) {
       ts::for_named(supers, [&](TSNode b) {
         if (ts::is(b, "identifier") || ts::is(b, "attribute")) def(idx).bases.push_back(to_expr(b));
+        if (ts::is(b, "keyword_argument") && ts::text(ts::field(b, "name"), src_) == "metaclass") {
+          def(idx).metaclass = to_expr(ts::field(b, "value"));
+        }
       });
       walk(supers, ds, as);
     }
@@ -280,7 +284,20 @@ class Summarizer {
       m_.calls.push_back(std::move(cs));
       walk(c, ds, as);
     });
-    walk(ts::field(n, "definition"), ds, as);
+    const TSNode definition = ts::field(n, "definition");
+    // In a class body, the attribute is what the decorator returns: `@cached_property def x` makes
+    // x a cached_property (whose __set_name__ runs when the class is created).
+    if (def(ds).kind == DefKind::Class && ts::is(definition, "function_definition")) {
+      ts::for_named(n, [&](TSNode c) {
+        if (!ts::is(c, "decorator")) return;
+        Expr call;
+        call.kind = Expr::Kind::Call;
+        call.sub.push_back(to_expr(ts_node_named_child(c, 0)));
+        auto& vals = def(ds).attr_values[text(ts::field(definition, "name"))];
+        if (vals.size() < 4) vals.emplace_back(ds, std::move(call));
+      });
+    }
+    walk(definition, ds, as);
   }
 
   // A call that runs a dunder of `arg`'s class, resolved in pass 2 like `arg.<dunder>()`.
@@ -817,6 +834,22 @@ class Project {
 
   ParamFlows flows;  // filled between the two linking passes
 
+  // A class's project metaclass: its own `metaclass=`, else its bases'.
+  std::optional<DefRef> metaclass_of(DefRef cls, int depth = 0) const {
+    if (depth > 16) return std::nullopt;
+    const Def& c = def(cls);
+    if (c.metaclass) {
+      const Value v = resolve_expr(cls.mod, c.attr_scope, *c.metaclass, 0);
+      if (v.kind == Value::Kind::Def && def(v.ref).kind == DefKind::Class) return v.ref;
+    }
+    for (const DefRef& b : bases_of(cls)) {
+      if (auto m = metaclass_of(b, depth + 1)) return m;
+    }
+    return std::nullopt;
+  }
+
+  const std::vector<DefRef>& bases(DefRef cls) const { return bases_of(cls); }
+
   const std::vector<Value>* flows_of(DefRef fn, const std::string& param) const {
     if (flows.empty() || def(fn).kind != DefKind::Function) return nullptr;
     auto it = flows.find({fn, param});
@@ -927,6 +960,9 @@ class Linker {
     }
     for (const ImportRef& imp : mod_.imports) on_import(imp);
     for (const CallSite& cs : mod_.calls) on_call(cs);
+    for (int d = 1; d < static_cast<int>(mod_.defs.size()); ++d) {
+      if (mod_.defs[std::size_t(d)].kind == DefKind::Class) class_creation(d);
+    }
     return std::move(out_);
   }
 
@@ -966,6 +1002,39 @@ class Linker {
     }
     if (p_.def(v.ref).kind != DefKind::Function) return std::nullopt;
     return std::make_pair(v.ref, bound);
+  }
+
+  // Running a class statement calls the metaclass's __prepare__, __new__ and __init__, the
+  // nearest base's __init_subclass__, and __set_name__ on class attributes that have one. Edges
+  // from the scope running the statement, inferred (via class_creation).
+  void class_creation(int d) {
+    const Def& c = mod_.defs[std::size_t(d)];
+    const DefRef cls{m_, d};
+    CallSite cs;
+    cs.scope = c.attr_scope;
+    cs.line = c.line;
+    auto to = [&](std::optional<DefRef> t) {
+      if (t) call_edge(cs, *t, Confidence::Inferred, "class_creation");
+    };
+    if (const auto meta = p_.metaclass_of(cls)) {
+      for (const char* m : {"__prepare__", "__new__", "__init__"}) {
+        to(p_.lookup_method(*meta, m));
+      }
+    }
+    for (const DefRef& b : p_.bases(cls)) {
+      if (const auto t = p_.lookup_method(b, "__init_subclass__")) {
+        to(t);
+        break;
+      }
+    }
+    for (const auto& [attr, vals] : c.attr_values) {
+      for (const auto& [scope, expr] : vals) {
+        if (scope != d) continue;
+        const Value v = p_.resolve_expr(m_, d, expr, 0);
+        if (v.kind == Value::Kind::Instance) to(p_.lookup_method(v.ref, "__set_name__"));
+        break;
+      }
+    }
   }
 
   // self.m() where neither the class nor its bases have m: a mixin or abstract base relying on
@@ -1074,6 +1143,14 @@ class Linker {
     if (via) attrs["via"] = via;
     if (protocol_) attrs["protocol"] = protocol_;
     emit(id(cs.scope), p_.id(target), EdgeKind::Calls, c, cs.line, std::move(attrs));
+    // Calling a class whose project metaclass defines __call__ runs that first.
+    if (k == DefKind::Class) {
+      if (const auto meta = p_.metaclass_of(target)) {
+        if (const auto call = p_.lookup_method(*meta, "__call__")) {
+          emit(id(cs.scope), p_.id(*call), EdgeKind::Calls, Confidence::Inferred, cs.line, {{"via", "metaclass"}});
+        }
+      }
+    }
   }
 
   void on_call(const CallSite& cs) {

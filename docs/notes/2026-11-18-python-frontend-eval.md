@@ -52,3 +52,39 @@ Out of about 18k call edges, 82% are `exact`.
 `optum verify` with the new tracer (`docs/verify.md`) counts every call made by a call instruction,
 indirect ones included. The text filter of the prototype dropped those. On the same workloads that
 gives **537 observed calls and 70.6% recall**: the old 93.5% was over 260 calls, without the hardest ones.
+
+## Update (2026-11-19): following values
+
+The misses on the standard-library workload were mostly calls the frontend could have followed
+statically: through a parameter, a return value, a callback, a class body, or what Python runs
+when a class statement executes. Each step below was measured on the same trace (530 observed
+calls, the v0.1 tracer):
+
+| Step | Recall |
+|---|---|
+| main (v0.1) | 71.5% |
+| Class bodies are a scope of their own (their calls belong to the class, as at runtime; names resolve there first) | 76.2% |
+| Protocol calls: `len(x)`, `list(x)`, `for v in x`... reach `__len__`, `__iter__`, `__next__` | 77.2% |
+| Parameter defaults; `self.x()` holding a function or class | 77.5% |
+| What call sites pass to parameters (functions, classes, instances), over up to 3 calls | 80.0% |
+| Callbacks given to `map`/`sorted`/`re.sub`...; mixins calling what only their subclasses have; class attributes | 81.7% |
+| Return values: closures, factories, decorator factories | 83.6% |
+| Class creation (metaclass `__new__`/`__prepare__`, `__init_subclass__`, `__set_name__`) and metaclass `__call__` | **85.1%** |
+
+The tracer also got a fix: a constructor call is recorded as a call to the class actually called
+(`Sub()` with an inherited `__init__` was recorded as the base class), and `__new__` constructors
+are mapped like `__init__`. That gives 533 observed calls; on that trace main has **73.4%** and
+this version **86.9%**.
+
+- **Precision:** every new edge is `inferred`, with `attrs.via` saying how it was found. In a hand
+  check of 36 sampled new edges (6 each of `argument`, `return_value`, `callback`,
+  `param_default`, `attr_value`, `subclass`) and 12 `class_creation`/`metaclass` edges, none was
+  wrong. The sample programs still score 100% precision. A new sample, `flows`, covers each rule;
+  `dynamic` now finds 2 of its 5 hard edges (decorator factory, callback through a parameter).
+- **Speed:** unchanged (1.15 s for the standard library); the parameter flows add up to 3 more
+  resolution passes, which are cheap next to parsing.
+- **Still missed (70):** dispatch tables (`self._dispatch[type(x).__repr__]`), `getattr`,
+  generators run by whoever iterates them, descriptors (`cached_property.__get__`), enum and typing
+  internals (metaclass machinery several levels deep), and fallbacks for C modules
+  (`try: from _x import f / except ImportError: def f`, where the Python fallback is the only
+  definition the frontend sees).

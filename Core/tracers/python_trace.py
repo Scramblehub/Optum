@@ -13,7 +13,9 @@ dispatch table, a callback, getattr...). Left out, because they aren't calls in 
 bodies running, operators and implicit special methods, property access (the caller's current
 bytecode instruction isn't a call). Generator
 expressions, comprehensions and lambdas count as their enclosing function. `Cls()` is recorded as
-a call to the class (Optum's rule), `super().__init__()` as a call to that `__init__`.
+a call to the class (Optum's rule), `super().__init__()` as a call to that `__init__`. The class is
+the one actually called, read from the running `__init__`/`__new__`: `Sub()` stays `Sub` when Sub
+inherits its constructor from a base.
 """
 import argparse
 import bisect
@@ -71,6 +73,34 @@ def main():
         q = re.sub(r"(\.)?<[^>]*>$", "", q)  # genexpr, lambda, comprehension, 3.12 annotation scope -> enclosing
         return "py:" + mod + ("." + q if q else "")
 
+    def module_id(path):
+        f = os.path.realpath(path)
+        if not f.startswith(root + os.sep) and f != root:
+            return None
+        mod = os.path.relpath(f, base)[:-3].replace(os.sep, ".")
+        return mod[: -len(".__init__")] if mod.endswith(".__init__") else mod
+
+    def class_id(cls):
+        """The node id of a class, or None if it isn't defined under the root."""
+        f = getattr(sys.modules.get(getattr(cls, "__module__", None)), "__file__", None)
+        q = getattr(cls, "__qualname__", None)
+        if not f or not f.endswith(".py") or not isinstance(q, str):
+            return None
+        mod = module_id(f)
+        return "py:" + mod + "." + re.sub(r"\.<locals>", "", q) if mod else None
+
+    def constructed_class(frame):
+        """For a constructor frame (__init__ or __new__), the id of the class being built."""
+        code = frame.f_code
+        if not code.co_argcount:
+            return None
+        first = frame.f_locals.get(code.co_varnames[0])
+        if code.co_name == "__new__":
+            if not isinstance(first, type) or issubclass(first, type):
+                return None  # a metaclass's __new__ building a class: keep it as is
+            return class_id(first)
+        return class_id(type(first))
+
     calls = {}
     instructions = {}  # code object -> (sorted offsets, their opnames)
 
@@ -99,10 +129,16 @@ def main():
         # and other implicit calls come from other instructions).
         if not is_call_site(back.f_code, back.f_lasti):
             return
-        if code.co_name == "__init__":
+        if code.co_name in ("__init__", "__new__"):
             line = linecache.getline(back.f_code.co_filename, back.f_lineno)
-            if "super(" not in line and ".__init__(" not in line:
-                callee = callee[: -len(".__init__")]  # Cls() -> the class, as Optum draws it
+            if "super(" not in line and "." + code.co_name + "(" not in line:
+                # Cls() -> the class, as Optum draws it: the class called, which may inherit its
+                # constructor from the base the code belongs to.
+                cls = constructed_class(frame)
+                if cls:
+                    callee = cls
+                elif code.co_name == "__init__":
+                    callee = callee[: -len(".__init__")]
         if callee != caller:
             calls[(caller, callee)] = calls.get((caller, callee), 0) + 1
 
