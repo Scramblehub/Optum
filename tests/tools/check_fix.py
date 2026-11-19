@@ -3,8 +3,9 @@
 
     check_fix.py apply|dry|revert --optum OPTUM --sample DIR --work DIR
 
-apply   merges 2 copies, refuses 4 (one is regulated tax code), tests pass before and after, and
-        pass again afterwards
+apply   merges 6 copies (3 functions; 3 methods: inherited, same file, another module), refuses 6
+        (different globals x2, a cycle, a cycle two merges would make together, regulated tax code,
+        super()), tests pass before and after
 dry     prints the diff and changes nothing
 revert  a test the merge breaks (a merged copy takes the kept function's __name__) fails after
         the change, so every file is restored
@@ -47,11 +48,21 @@ def main():
         r = run(cmd + ["--test", TESTS, "--apply"])
         assert r.returncode == 0, r.stderr
         rep = json.load(open(report))
-        assert rep["applied"] and len(rep["merged"]) == 2 and len(rep["refused"]) == 4, rep
+        assert rep["applied"] and len(rep["merged"]) == 6 and len(rep["refused"]) == 6, rep
+        merged = {m["copy"] for m in rep["merged"]}
+        assert {"py:shop.money.Price.as_text", "py:shop.money.Refund.as_text",
+                "py:shop.legacy.money.LegacyAmount.as_text"} <= merged, merged
         whys = sorted(r["why"].split(":")[0].split(" (")[0] for r in rep["refused"])
         assert sum(w.startswith("regulated") for w in whys) == 1, whys
         assert sum(w.startswith("globals mean") for w in whys) == 2, whys
-        assert sum(w.startswith("import cycle") for w in whys) == 1, whys
+        assert sum(w.startswith("import cycle") for w in whys) == 2, whys  # one only with another merge's import
+        assert any("another merge adds" in r["why"] for r in rep["refused"]), rep["refused"]
+        assert sum(w.startswith("uses super") for w in whys) == 1, whys
+        money = open(os.path.join(a.work, "shop", "money.py")).read()
+        assert "pass  # as_text is inherited from shop.money.Money.as_text" in money, money  # Price(Money): deleted
+        assert "    as_text = Money.as_text  # merged by optum" in money, money                  # Refund: assigned
+        legacy = open(os.path.join(a.work, "shop", "legacy", "money.py")).read()
+        assert "from shop.money import Money" in legacy and "as_text = Money.as_text" in legacy, legacy
         assert rep["tests"] == {"before": True, "after": True}, rep
         t = run(TESTS, shell=True, cwd=a.work)
         assert t.returncode == 0, t.stderr

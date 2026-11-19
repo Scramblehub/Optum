@@ -26,5 +26,26 @@ class ShopTest(unittest.TestCase):
         self.assertEqual(report.format_row({"a": 1}), export.format_line({"a": 1}))
 
 
+
+class MoneyTest(unittest.TestCase):
+    def test_money(self):
+        from shop.legacy.money import LegacyAmount
+        from shop.money import Box, Item, Money, Price, Refund
+        self.assertEqual(Money(1250, "GBP").as_text(), "GBP 12.50")
+        self.assertEqual(Price(-305, "EUR").as_text(), "-EUR 3.05")
+        self.assertEqual(Refund(700, "JPY").as_text(), "-JPY 700")
+        self.assertEqual(LegacyAmount(5, "USD").as_text(), "USD 0.05")
+        self.assertEqual(Item().describe("x"), "X: Item (2)")
+        self.assertEqual(Box().describe("y"), "Y: Box (2)")
+
+
+
+class CycleTest(unittest.TestCase):
+    def test_both(self):
+        from shop import alpha, beta
+        self.assertEqual(alpha.weighted_sum([1, None, 2]), beta.weighted_sum([1, None, 2]))
+        self.assertEqual(alpha.keywords("the cat sat on the mat", 3), beta.keywords("the cat sat on the mat", 3))
+
+
 if __name__ == "__main__":
     unittest.main()
