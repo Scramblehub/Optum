@@ -61,16 +61,20 @@ struct Def {
   std::string qual;  // dotted path inside the module; "" for the module itself
   DefKind kind = DefKind::Module;
   int parent = -1;
-  int attr_scope = 0;  // nearest function or module around the def statement
+  int attr_scope = 0;  // the scope around the def statement (function, module, or class body)
   std::uint32_t line = 1, end_line = 1;
   std::string self_name;    // methods: name of the first parameter
   std::vector<Expr> bases;  // classes
+  std::optional<Expr> metaclass;  // classes: `metaclass=` in the class statement
   // Classes: values assigned to self.<attr> in methods, with the method's scope (first few only).
   std::unordered_map<std::string, std::vector<std::pair<int, Expr>>> attr_values;
   std::unordered_map<std::string, int> children;
   std::unordered_map<std::string, Binding> bindings;
   std::unordered_set<std::string> locals;
   std::unordered_map<std::string, Expr> values;  // last simple assignment per local name
+  std::vector<std::string> params;               // functions: parameter names, in order
+  std::unordered_map<std::string, Expr> defaults;  // functions: parameter default values
+  std::vector<Expr> returns;                       // functions: returned expressions (first few)
   std::vector<std::string> star_imports;
 };
 
@@ -85,7 +89,14 @@ struct CallSite {
   Expr callee;
   std::optional<Expr> first_arg;
   std::optional<Expr> url_kw;
+  // Arguments that name something (a name, attribute or call), for following what each call
+  // passes to each parameter. Positional ones stop at the first *args; others are Kind::Other.
+  std::vector<Expr> args;
+  std::vector<std::pair<std::string, Expr>> kwargs;
   std::uint32_t line = 0;
+  // A builtin that calls a dunder on its argument (len(x) -> x.__len__()), or "for" for a loop
+  // over x; callee is then x.<dunder>. Empty for ordinary calls.
+  std::string protocol;
 };
 
 struct ModuleInfo {
@@ -99,6 +110,32 @@ struct ModuleInfo {
   std::vector<ImportRef> imports;
   std::vector<CallSite> calls;
 };
+
+// Builtins that call a dunder method of their first argument. Iteration (`for`, list(x), ...)
+// calls __iter__, then __next__ on what it returns (often the object itself).
+struct Protocol {
+  const char* builtin;
+  std::vector<const char*> dunders;
+};
+
+const Protocol* protocol_dunders(std::string_view name) {
+  static const std::vector<Protocol> table = {
+      {"len", {"__len__"}},       {"iter", {"__iter__"}},     {"next", {"__next__"}},
+      {"str", {"__str__"}},       {"repr", {"__repr__"}},     {"int", {"__int__"}},
+      {"float", {"__float__"}},   {"bool", {"__bool__"}},     {"hash", {"__hash__"}},
+      {"abs", {"__abs__"}},       {"bytes", {"__bytes__"}},   {"reversed", {"__reversed__"}},
+      {"format", {"__format__"}}, {"for", {"__iter__", "__next__"}},
+      {"list", {"__iter__", "__next__"}},   {"tuple", {"__iter__", "__next__"}},
+      {"set", {"__iter__", "__next__"}},    {"frozenset", {"__iter__", "__next__"}},
+      {"sorted", {"__iter__", "__next__"}}, {"sum", {"__iter__", "__next__"}},
+      {"min", {"__iter__", "__next__"}},    {"max", {"__iter__", "__next__"}},
+      {"any", {"__iter__", "__next__"}},    {"all", {"__iter__", "__next__"}},
+  };
+  for (const Protocol& p : table) {
+    if (name == p.builtin) return &p;
+  }
+  return nullptr;
+}
 
 // ===================================================================== pass 1
 
@@ -137,10 +174,20 @@ class Summarizer {
     if (t == "call") on_call(n, as);
     else if (t == "assignment") return on_assignment(n, ds, as);
     else if (t == "augmented_assignment") bind_names(ts::field(n, "left"), ds, nullptr);
-    else if (t == "for_statement" || t == "for_in_clause") bind_names(ts::field(n, "left"), ds, nullptr);
+    else if (t == "for_statement" || t == "for_in_clause") {
+      bind_names(ts::field(n, "left"), ds, nullptr);
+      protocol_call("for", ts::field(n, "right"), as);
+    }
     else if (t == "as_pattern_target") bind_names(n, ds, nullptr);
     else if (t == "named_expression") bind_names(ts::field(n, "name"), ds, nullptr);
-    else if (t == "import_statement" || t == "import_from_statement") return on_import(n, ds, as);
+    else if (t == "import_statement" || t == "import_from_statement") return on_import(n, ds);
+    else if (t == "return_statement" && def(as).kind == DefKind::Function && def(as).returns.size() < 4 &&
+             ts_node_named_child_count(n) == 1) {
+      Expr r = to_expr(ts_node_named_child(n, 0));
+      if (r.kind == Expr::Kind::Name || r.kind == Expr::Kind::Attr || r.kind == Expr::Kind::Call) {
+        def(as).returns.push_back(std::move(r));
+      }
+    }
     walk_children(n, ds, as);
   }
 
@@ -192,6 +239,10 @@ class Summarizer {
         });
       }
       if (pname.empty()) return;
+      if ((pt == "default_parameter" || pt == "typed_default_parameter") && !ts_node_is_null(ts::field(p, "value"))) {
+        def(idx).defaults[pname] = to_expr(ts::field(p, "value"));
+      }
+      def(idx).params.push_back(pname);
       if (first && def(ds).kind == DefKind::Class && !is_static(n)) def(idx).self_name = pname;
       first = false;
       def(idx).locals.insert(std::move(pname));
@@ -207,48 +258,105 @@ class Summarizer {
     if (!ts_node_is_null(supers)) {
       ts::for_named(supers, [&](TSNode b) {
         if (ts::is(b, "identifier") || ts::is(b, "attribute")) def(idx).bases.push_back(to_expr(b));
+        if (ts::is(b, "keyword_argument") && ts::text(ts::field(b, "name"), src_) == "metaclass") {
+          def(idx).metaclass = to_expr(ts::field(b, "value"));
+        }
       });
       walk(supers, ds, as);
     }
     const TSNode body = ts::field(n, "body");
-    // The class body's own statements run in the enclosing scope (Python skips class scopes
-    // when resolving names inside methods), so calls there are attributed to `as`.
-    if (!ts_node_is_null(body)) walk_children(body, idx, as);
+    // The class body is a scope of its own: its calls are the class's (the runtime sees them run
+    // in the class body's frame) and its names resolve in the class first. Methods skip it
+    // (resolve_name), as Python does.
+    if (!ts_node_is_null(body)) walk_children(body, idx, idx);
   }
 
   void on_decorated(TSNode n, int ds, int as) {
     ts::for_named(n, [&](TSNode c) {
       if (!ts::is(c, "decorator")) return;
       const TSNode e = ts_node_named_child(c, 0);
-      // `@name` calls name(fn); `@name(args)` is a call node, recorded by walking it.
-      if (!ts::is(e, "call")) {
-        CallSite cs;
-        cs.scope = as;
-        cs.callee = to_expr(e);
-        cs.line = ts::line(e);
-        m_.calls.push_back(std::move(cs));
-      }
+      // `@name` calls name(fn). `@name(args)` is a call node, recorded by walking it, and then
+      // its result is called with fn.
+      CallSite cs;
+      cs.scope = as;
+      cs.callee = to_expr(e);
+      cs.line = ts::line(e);
+      m_.calls.push_back(std::move(cs));
       walk(c, ds, as);
     });
-    walk(ts::field(n, "definition"), ds, as);
+    const TSNode definition = ts::field(n, "definition");
+    // In a class body, the attribute is what the decorator returns: `@cached_property def x` makes
+    // x a cached_property (whose __set_name__ runs when the class is created).
+    if (def(ds).kind == DefKind::Class && ts::is(definition, "function_definition")) {
+      ts::for_named(n, [&](TSNode c) {
+        if (!ts::is(c, "decorator")) return;
+        Expr call;
+        call.kind = Expr::Kind::Call;
+        call.sub.push_back(to_expr(ts_node_named_child(c, 0)));
+        auto& vals = def(ds).attr_values[text(ts::field(definition, "name"))];
+        if (vals.size() < 4) vals.emplace_back(ds, std::move(call));
+      });
+    }
+    walk(definition, ds, as);
+  }
+
+  // A call that runs a dunder of `arg`'s class, resolved in pass 2 like `arg.<dunder>()`.
+  void protocol_call(const char* builtin, TSNode arg, int as) {
+    if (ts_node_is_null(arg)) return;
+    CallSite cs;
+    cs.scope = as;
+    cs.callee.kind = Expr::Kind::Attr;
+    cs.callee.sub.push_back(to_expr(arg));
+    if (cs.callee.sub[0].kind == Expr::Kind::Other) return;
+    cs.line = ts::line(arg);
+    cs.protocol = builtin;
+    m_.calls.push_back(std::move(cs));
   }
 
   void on_call(TSNode n, int as) {
+    if (const TSNode f = ts::field(n, "function"); ts::is(f, "identifier")) {
+      const std::string fname = text(f);
+      if (protocol_dunders(fname)) {
+        const TSNode args = ts::field(n, "arguments");
+        if (ts::is(args, "argument_list") && ts_node_named_child_count(args) >= 1) {
+          const TSNode a = ts_node_named_child(args, 0);
+          if (!ts::is(a, "keyword_argument") && !ts::is(a, "list_splat") && !ts::is(a, "dictionary_splat")) {
+            protocol_call(protocol_dunders(fname)->builtin, a, as);
+          }
+        }
+      }
+    }
     CallSite cs;
     cs.scope = as;
     cs.callee = to_expr(ts::field(n, "function"));
     cs.line = ts::line(n);
     const TSNode args = ts::field(n, "arguments");
     if (ts::is(args, "argument_list")) {
+      bool positional = true;
       ts::for_named(args, [&](TSNode a) {
         const std::string_view at = ts_node_type(a);
-        if (at == "comment" || at == "list_splat" || at == "dictionary_splat") return;
+        if (at == "comment" || at == "dictionary_splat") return;
+        if (at == "list_splat") {
+          positional = false;
+          return;
+        }
         if (at == "keyword_argument") {
-          if (ts::text(ts::field(a, "name"), src_) == "url") cs.url_kw = to_expr(ts::field(a, "value"));
+          const std::string kw = text(ts::field(a, "name"));
+          Expr v = to_expr(ts::field(a, "value"));
+          if (kw == "url") cs.url_kw = v;
+          if (v.kind == Expr::Kind::Name || v.kind == Expr::Kind::Attr || v.kind == Expr::Kind::Call) {
+            cs.kwargs.emplace_back(kw, std::move(v));
+          }
           return;
         }
         if (!cs.first_arg) cs.first_arg = to_expr(a);
+        if (positional) {
+          Expr v = to_expr(a);
+          if (v.kind == Expr::Kind::Str) v = Expr{};
+          cs.args.push_back(std::move(v));
+        }
       });
+      while (!cs.args.empty() && cs.args.back().kind == Expr::Kind::Other) cs.args.pop_back();
     }
     m_.calls.push_back(std::move(cs));
   }
@@ -258,6 +366,11 @@ class Summarizer {
     const TSNode right = ts::field(n, "right");
     std::optional<Expr> value;
     if (ts::is(left, "identifier") && !ts_node_is_null(right)) value = to_expr(right);
+    // A class attribute (`_address_class = IPv4Address` in a class body): read through self too.
+    if (ts::is(left, "identifier") && !ts_node_is_null(right) && def(ds).kind == DefKind::Class) {
+      auto& vals = def(ds).attr_values[text(left)];
+      if (vals.size() < 4) vals.emplace_back(ds, to_expr(right));
+    }
     // self.attr = value inside a method: remember it on the class for typing later calls.
     if (ts::is(left, "attribute") && !ts_node_is_null(right) && def(ds).kind == DefKind::Function &&
         !def(ds).self_name.empty() && ts::text(ts::field(left, "object"), src_) == def(ds).self_name) {
@@ -308,8 +421,9 @@ class Summarizer {
     return base.empty() ? rest : base + "." + rest;
   }
 
-  void on_import(TSNode n, int ds, int as) {
-    const int bs = def(ds).kind == DefKind::Class ? as : ds;
+  void on_import(TSNode n, int ds) {
+    // An import in a class body binds where methods can see it (not Python's rule, but harmless).
+    const int bs = def(ds).kind == DefKind::Class ? def(ds).attr_scope : ds;
     const std::uint32_t ln = ts::line(n);
     if (ts::is(n, "import_statement")) {
       ts::for_field(n, "name", [&](TSNode c) {
@@ -425,7 +539,24 @@ struct Value {
   Kind kind = Kind::Unknown;
   DefRef ref;        // Module: ref.mod. Others: the def (for instances: their class)
   std::string path;  // ThirdParty: dotted path, "()" marks a call result
+  // Not certain: found through a parameter's default value, or through what callers pass to a
+  // parameter. The caller may pass something else.
+  enum Guess : std::uint8_t { None, Default, Argument, Return };
+  Guess guess = None;
 };
+
+struct ParamKey {
+  DefRef fn;
+  std::string param;
+  bool operator==(const ParamKey&) const = default;
+};
+struct ParamKeyHash {
+  std::size_t operator()(const ParamKey& k) const {
+    return DefRefHash{}(k.fn) * 31 + std::hash<std::string>{}(k.param);
+  }
+};
+// What call sites pass to a parameter: functions and classes (Def), or instances of a class.
+using ParamFlows = std::unordered_map<ParamKey, std::vector<Value>, ParamKeyHash>;
 
 struct NameHit {
   enum class Kind : std::uint8_t { None, Value, Local } kind = Kind::None;
@@ -531,7 +662,7 @@ class Project {
     const auto& defs = mods[std::size_t(m)].defs;
     for (int s = scope; s >= 0; s = defs[std::size_t(s)].parent) {
       const Def& d = defs[std::size_t(s)];
-      if (d.kind == DefKind::Class) continue;  // class scopes aren't visible from methods
+      if (d.kind == DefKind::Class && s != scope) continue;  // visible only to the class body itself
       if (auto it = d.children.find(name); it != d.children.end()) {
         return {NameHit::Kind::Value, def_value({m, it->second}), s};
       }
@@ -575,11 +706,28 @@ class Project {
         if (auto it = d.values.find(e.text); it != d.values.end()) {
           return resolve_expr(m, hit.scope, it->second, depth + 1);
         }
+        // A parameter never reassigned: its default (evaluated where the def statement runs).
+        if (auto it = d.defaults.find(e.text); it != d.defaults.end()) {
+          Value v = resolve_expr(m, d.attr_scope, it->second, depth + 1);
+          if (v.kind != Value::Kind::Unknown) {
+            v.guess = Value::Default;
+            return v;
+          }
+        }
+        // A parameter that every call site found passes the same known thing (one class's
+        // instances, or one function).
+        if (const auto* vs = flows_of({m, hit.scope}, e.text); vs && vs->size() == 1) {
+          Value v = vs->front();
+          v.guess = Value::Argument;
+          return v;
+        }
         return {};
       }
       case Expr::Kind::Attr: {
         const Value obj = resolve_expr(m, scope, e.sub[0], depth + 1);
-        return member_of(obj, e.text, depth);
+        Value v = member_of(obj, e.text, depth);
+        v.guess = std::max(v.guess, obj.guess);
+        return v;
       }
       case Expr::Kind::Call: {
         const Expr& f = e.sub[0];
@@ -590,9 +738,21 @@ class Project {
         }
         const Value fv = resolve_expr(m, scope, f, depth + 1);
         if (fv.kind == Value::Kind::Def && def(fv.ref).kind == DefKind::Class) {
-          return {Value::Kind::Instance, fv.ref, {}};
+          return {Value::Kind::Instance, fv.ref, {}, fv.guess};
         }
         if (fv.kind == Value::Kind::ThirdParty) return third_party(fv.path + "()");
+        // A project function: what it returns, if a return statement names a function, a class
+        // or an instance of one (factories, decorator factories, closures).
+        if (fv.kind == Value::Kind::Def && def(fv.ref).kind == DefKind::Function) {
+          for (const Expr& r : def(fv.ref).returns) {
+            Value v = resolve_expr(fv.ref.mod, fv.ref.def, r, depth + 2);
+            if (v.kind == Value::Kind::SelfInstance) continue;  // `return self`: the receiver, unknown here
+            if (v.kind == Value::Kind::Instance || (v.kind == Value::Kind::Def && def(v.ref).kind != DefKind::Module)) {
+              v.guess = std::max(v.guess, std::max(fv.guess, Value::Return));
+              return v;
+            }
+          }
+        }
         return {};
       }
       default:
@@ -672,6 +832,30 @@ class Project {
     return out;
   }
 
+  ParamFlows flows;  // filled between the two linking passes
+
+  // A class's project metaclass: its own `metaclass=`, else its bases'.
+  std::optional<DefRef> metaclass_of(DefRef cls, int depth = 0) const {
+    if (depth > 16) return std::nullopt;
+    const Def& c = def(cls);
+    if (c.metaclass) {
+      const Value v = resolve_expr(cls.mod, c.attr_scope, *c.metaclass, 0);
+      if (v.kind == Value::Kind::Def && def(v.ref).kind == DefKind::Class) return v.ref;
+    }
+    for (const DefRef& b : bases_of(cls)) {
+      if (auto m = metaclass_of(b, depth + 1)) return m;
+    }
+    return std::nullopt;
+  }
+
+  const std::vector<DefRef>& bases(DefRef cls) const { return bases_of(cls); }
+
+  const std::vector<Value>* flows_of(DefRef fn, const std::string& param) const {
+    if (flows.empty() || def(fn).kind != DefKind::Function) return nullptr;
+    auto it = flows.find({fn, param});
+    return it == flows.end() ? nullptr : &it->second;
+  }
+
   const std::vector<DefRef>* methods_named(const std::string& name) const {
     auto it = methods_by_name_.find(name);
     return it == methods_by_name_.end() ? nullptr : &it->second;
@@ -742,12 +926,43 @@ class Linker {
  public:
   Linker(const Project& p, int m) : p_(p), m_(m), mod_(p.mods[std::size_t(m)]) {}
 
+  // Pass 2a: what each call site passes to each parameter of the project function it calls.
+  std::vector<std::pair<ParamKey, Value>> collect_flows() const {
+    std::vector<std::pair<ParamKey, Value>> out;
+    for (const CallSite& cs : mod_.calls) {
+      if (!cs.protocol.empty() || (cs.args.empty() && cs.kwargs.empty())) continue;
+      const auto target = callee_target(cs);
+      if (!target) continue;
+      const Def& fn = p_.def(target->first);
+      const std::size_t skip = target->second && !fn.self_name.empty() ? 1 : 0;
+      auto add = [&](const std::string& param, const Expr& arg) {
+        Value v = p_.resolve_expr(m_, cs.scope, arg, 0);
+        if (v.kind == Value::Kind::SelfInstance) v.kind = Value::Kind::Instance;
+        const bool callable = v.kind == Value::Kind::Def &&
+                              (p_.def(v.ref).kind == DefKind::Function || p_.def(v.ref).kind == DefKind::Class);
+        if (!callable && v.kind != Value::Kind::Instance) return;
+        v.guess = Value::None;
+        out.emplace_back(ParamKey{target->first, param}, v);
+      };
+      for (std::size_t i = 0; i < cs.args.size() && i + skip < fn.params.size(); ++i) {
+        if (cs.args[i].kind != Expr::Kind::Other) add(fn.params[i + skip], cs.args[i]);
+      }
+      for (const auto& [kw, arg] : cs.kwargs) {
+        if (std::find(fn.params.begin(), fn.params.end(), kw) != fn.params.end()) add(kw, arg);
+      }
+    }
+    return out;
+  }
+
   std::vector<EdgeOut> run() {
     for (int d = 1; d < static_cast<int>(mod_.defs.size()); ++d) {
       emit(id(mod_.defs[std::size_t(d)].parent), id(d), EdgeKind::Defines, Confidence::Exact, mod_.defs[std::size_t(d)].line);
     }
     for (const ImportRef& imp : mod_.imports) on_import(imp);
     for (const CallSite& cs : mod_.calls) on_call(cs);
+    for (int d = 1; d < static_cast<int>(mod_.defs.size()); ++d) {
+      if (mod_.defs[std::size_t(d)].kind == DefKind::Class) class_creation(d);
+    }
     return std::move(out_);
   }
 
@@ -756,8 +971,129 @@ class Linker {
   int m_;
   const ModuleInfo& mod_;
   std::vector<EdgeOut> out_;
+  const char* protocol_ = nullptr;  // set while resolving a protocol call (len(x), for ...)
+  Value::Guess guess_ = Value::None;  // how sure the callee being linked is (see Value::guess)
 
   std::string id(int def) const { return p_.id({m_, def}); }
+
+  // The project function a call runs, and whether it's bound (the first parameter is the object):
+  // f(), mod.f(), obj.m(), self.m(), Cls() (its __init__), Cls.m().
+  std::optional<std::pair<DefRef, bool>> callee_target(const CallSite& cs) const {
+    const Expr& callee = cs.callee;
+    Value v;
+    bool bound = false;
+    if (callee.kind == Expr::Kind::Attr) {
+      const Value obj = p_.resolve_expr(m_, cs.scope, callee.sub[0], 0);
+      if (obj.kind == Value::Kind::Instance || obj.kind == Value::Kind::SelfInstance) {
+        const auto mth = p_.lookup_method(obj.ref, callee.text);
+        if (!mth) return std::nullopt;
+        return std::make_pair(*mth, true);
+      }
+      v = p_.member_of(obj, callee.text, 0);
+    } else if (callee.kind == Expr::Kind::Name) {
+      v = p_.resolve_expr(m_, cs.scope, callee, 0);
+    }
+    if (v.kind != Value::Kind::Def) return std::nullopt;
+    if (p_.def(v.ref).kind == DefKind::Class) {
+      const auto init = p_.lookup_method(v.ref, "__init__");
+      if (!init) return std::nullopt;
+      v.ref = *init;
+      bound = true;
+    }
+    if (p_.def(v.ref).kind != DefKind::Function) return std::nullopt;
+    return std::make_pair(v.ref, bound);
+  }
+
+  // Running a class statement calls the metaclass's __prepare__, __new__ and __init__, the
+  // nearest base's __init_subclass__, and __set_name__ on class attributes that have one. Edges
+  // from the scope running the statement, inferred (via class_creation).
+  void class_creation(int d) {
+    const Def& c = mod_.defs[std::size_t(d)];
+    const DefRef cls{m_, d};
+    CallSite cs;
+    cs.scope = c.attr_scope;
+    cs.line = c.line;
+    auto to = [&](std::optional<DefRef> t) {
+      if (t) call_edge(cs, *t, Confidence::Inferred, "class_creation");
+    };
+    if (const auto meta = p_.metaclass_of(cls)) {
+      for (const char* m : {"__prepare__", "__new__", "__init__"}) {
+        to(p_.lookup_method(*meta, m));
+      }
+    }
+    for (const DefRef& b : p_.bases(cls)) {
+      if (const auto t = p_.lookup_method(b, "__init_subclass__")) {
+        to(t);
+        break;
+      }
+    }
+    for (const auto& [attr, vals] : c.attr_values) {
+      for (const auto& [scope, expr] : vals) {
+        if (scope != d) continue;
+        const Value v = p_.resolve_expr(m_, d, expr, 0);
+        if (v.kind == Value::Kind::Instance) to(p_.lookup_method(v.ref, "__set_name__"));
+        break;
+      }
+    }
+  }
+
+  // self.m() where neither the class nor its bases have m: a mixin or abstract base relying on
+  // what its subclasses get from their other bases or class attributes. Every distinct target
+  // found in a subclass (at most 4), inferred.
+  void subclass_members(const CallSite& cs, DefRef cls, const std::string& name) {
+    std::vector<DefRef> found;
+    for (const DefRef& sub : p_.descendants(cls)) {
+      std::optional<DefRef> t = p_.lookup_method(sub, name);
+      if (!t) {
+        const Value v = p_.member_of(Value{Value::Kind::SelfInstance, sub, {}}, name, 0);
+        if (v.kind == Value::Kind::Def) t = v.ref;
+      }
+      if (t && std::find(found.begin(), found.end(), *t) == found.end()) found.push_back(*t);
+      if (found.size() > 4) return;
+    }
+    for (const DefRef& t : found) call_edge(cs, t, Confidence::Inferred, "subclass");
+  }
+
+  // map(f, xs), sorted(xs, key=f), pattern.sub(f, s), reduce(f, xs)...: builtins and library
+  // functions that call a function they're given, from the caller's frame. An edge to each
+  // project function passed, inferred.
+  void callbacks(const CallSite& cs) {
+    static const std::unordered_set<std::string_view> takers = {"map", "filter", "sorted", "min", "max", "reduce",
+                                                                "sub", "subn", "sort"};
+    if (!takers.count(cs.callee.text)) return;
+    if (cs.callee.kind == Expr::Kind::Name && p_.resolve_name(m_, cs.scope, cs.callee.text, 0).kind != NameHit::Kind::None &&
+        cs.callee.text != "reduce") {
+      return;  // shadowed builtin
+    }
+    auto pass = [&](const Expr& arg) {
+      const Value v = p_.resolve_expr(m_, cs.scope, arg, 0);
+      if (v.kind == Value::Kind::Def && p_.def(v.ref).kind == DefKind::Function) {
+        call_edge(cs, v.ref, Confidence::Inferred, "callback");
+      }
+    };
+    for (const Expr& a : cs.args) {
+      if (a.kind == Expr::Kind::Name || a.kind == Expr::Kind::Attr) pass(a);
+    }
+    for (const auto& [kw, a] : cs.kwargs) {
+      if (kw == "key" || kw == "repl") pass(a);
+    }
+  }
+
+  // p(...) where p is a parameter (of this function or an enclosing one) that callers pass
+  // functions or classes to: an edge to each of them. True if p is such a parameter.
+  bool call_param(const CallSite& cs) {
+    const NameHit hit = p_.resolve_name(m_, cs.scope, cs.callee.text, 0);
+    if (hit.kind != NameHit::Kind::Local) return false;
+    const Def& d = mod_.defs[std::size_t(hit.scope)];
+    if (d.values.count(cs.callee.text) || d.defaults.count(cs.callee.text)) return false;
+    const auto* vs = p_.flows_of({m_, hit.scope}, cs.callee.text);
+    if (!vs) return false;
+    int n = 0;
+    for (const Value& v : *vs) {
+      if (v.kind == Value::Kind::Def && ++n <= 8) call_edge(cs, v.ref, Confidence::Inferred, "argument");
+    }
+    return n > 0;
+  }
 
   void emit(std::string from, std::string to, EdgeKind kind, Confidence c, std::uint32_t line,
             nlohmann::json attrs = nlohmann::json::object(), std::optional<Node> node = std::nullopt) {
@@ -800,20 +1136,49 @@ class Linker {
     const DefKind k = p_.def(target).kind;
     if (k != DefKind::Function && k != DefKind::Class) return;
     nlohmann::json attrs = nlohmann::json::object();
+    if (guess_ != Value::None) {  // the receiver or callee came through a parameter
+      c = Confidence::Inferred;
+      via = guess_ == Value::Default ? "param_default" : guess_ == Value::Argument ? "argument" : "return_value";
+    }
     if (via) attrs["via"] = via;
+    if (protocol_) attrs["protocol"] = protocol_;
     emit(id(cs.scope), p_.id(target), EdgeKind::Calls, c, cs.line, std::move(attrs));
+    // Calling a class whose project metaclass defines __call__ runs that first.
+    if (k == DefKind::Class) {
+      if (const auto meta = p_.metaclass_of(target)) {
+        if (const auto call = p_.lookup_method(*meta, "__call__")) {
+          emit(id(cs.scope), p_.id(*call), EdgeKind::Calls, Confidence::Inferred, cs.line, {{"via", "metaclass"}});
+        }
+      }
+    }
   }
 
   void on_call(const CallSite& cs) {
+    if (!cs.protocol.empty()) return on_protocol_call(cs);
+    guess_ = Value::None;
     const Expr& callee = cs.callee;
+    if (callee.kind == Expr::Kind::Name && call_param(cs)) return;
     if (callee.kind == Expr::Kind::Attr && try_sql(cs)) return;
 
     if (callee.kind == Expr::Kind::Attr) {
       const Value obj = p_.resolve_expr(m_, cs.scope, callee.sub[0], 0);
       const std::string& name = callee.text;
+      guess_ = obj.guess;
       switch (obj.kind) {
         case Value::Kind::SelfInstance: {
-          if (auto mth = p_.lookup_method(obj.ref, name)) call_edge(cs, *mth, Confidence::Exact);
+          if (auto mth = p_.lookup_method(obj.ref, name)) {
+            call_edge(cs, *mth, Confidence::Exact);
+          } else {
+            // self.x() where x is an attribute holding a function or class (self.x = f, or a
+            // parameter's default stored on self). Other assignments may replace it: inferred.
+            const Value v = p_.member_of(obj, name, 0);
+            if (v.kind == Value::Kind::Def) {
+              guess_ = v.guess;
+              call_edge(cs, v.ref, Confidence::Inferred, "attr_value");
+            } else {
+              subclass_members(cs, obj.ref, name);
+            }
+          }
           for (const DefRef& sub : p_.descendants(obj.ref)) {  // overrides may run instead
             const Def& sd = p_.def(sub);
             if (auto it = sd.children.find(name); it != sd.children.end()) {
@@ -829,6 +1194,7 @@ class Linker {
           }
           return;
         case Value::Kind::Unknown:
+          callbacks(cs);
           // Receiver unknown: if exactly one project class defines a method by this name, it's the
           // likely target. Not for dunders or names builtin types use (x.startswith(), x.get()):
           // those are far more likely to be the builtin.
@@ -840,6 +1206,7 @@ class Linker {
           return;
         default: {
           const Value v = p_.member_of(obj, name, 0);
+          guess_ = std::max(guess_, v.guess);
           if (v.kind == Value::Kind::Def) call_edge(cs, v.ref, Confidence::Exact);
           else if (v.kind == Value::Kind::ThirdParty) try_http(cs, v.path);
           return;
@@ -848,8 +1215,26 @@ class Linker {
     }
 
     const Value v = p_.resolve_expr(m_, cs.scope, callee, 0);
+    guess_ = v.guess;
+    if (v.kind != Value::Kind::Def || p_.def(v.ref).name == "reduce") callbacks(cs);
     if (v.kind == Value::Kind::Def) call_edge(cs, v.ref, Confidence::Exact);
     else if (v.kind == Value::Kind::ThirdParty) try_http(cs, v.path);
+  }
+
+  // len(x), for v in x, ...: the dunder on x's class, when x is an instance of a known class (not
+  // a class object, whose dunders come from its metaclass), and the builtin isn't shadowed.
+  void on_protocol_call(const CallSite& cs) {
+    if (cs.protocol != "for" && p_.resolve_name(m_, cs.scope, cs.protocol, 0).kind != NameHit::Kind::None) return;
+    const Value obj = p_.resolve_expr(m_, cs.scope, cs.callee.sub[0], 0);
+    if (obj.kind != Value::Kind::Instance && obj.kind != Value::Kind::SelfInstance) return;
+    protocol_ = cs.protocol.c_str();
+    for (const char* dunder : protocol_dunders(cs.protocol)->dunders) {
+      CallSite c = cs;
+      c.protocol.clear();
+      c.callee.text = dunder;
+      on_call(c);
+    }
+    protocol_ = nullptr;
   }
 
   bool try_sql(const CallSite& cs) {
@@ -977,6 +1362,29 @@ Graph extract_python_files(const fs::path& root, const std::vector<fs::path>& re
                                  [](const ModuleInfo& a, const ModuleInfo& b) { return a.name == b.name; }),
                      project.mods.end());
   project.index();
+
+  // What callers pass to parameters, so a parameter's calls and methods can be followed. A
+  // parameter passed on to another function needs another round (parse -> _parse_sub -> _parse).
+  for (int round = 0; round < 3; ++round) {
+    std::vector<std::vector<std::pair<ParamKey, Value>>> flows(project.mods.size());
+    parallel_for(project.mods.size(), threads,
+                 [&](std::size_t i) { flows[i] = Linker(project, static_cast<int>(i)).collect_flows(); });
+    ParamFlows next;
+    std::size_t added = 0;
+    for (auto& fl : flows) {
+      for (auto& [key, v] : fl) {
+        auto& vs = next[key];
+        const bool seen = std::any_of(vs.begin(), vs.end(), [&](const Value& o) { return o.kind == v.kind && o.ref == v.ref; });
+        if (!seen) vs.push_back(std::move(v));
+      }
+    }
+    for (const auto& [key, vs] : next) {
+      auto it = project.flows.find(key);
+      added += it == project.flows.end() ? vs.size() : vs.size() - std::min(vs.size(), it->second.size());
+    }
+    project.flows = std::move(next);
+    if (added == 0) break;
+  }
 
   std::vector<std::vector<EdgeOut>> edges(project.mods.size());
   parallel_for(project.mods.size(), threads,

@@ -47,7 +47,28 @@ Ids are `py:` followed by the dotted path from the analysed root.
 | How an object's class is known | `self`; `x = Cls()` in the same scope; `self.x = Cls()` in any method of the class; `Cls().m()` directly. Edges found through `x = Cls()` or `self.x = Cls()` are `confidence: inferred`, `attrs.via: "local_type"` |
 | `x.m()` with `x` unknown | `calls` to `m` only if exactly one project class defines `m`, and `m` isn't a dunder or a method name of a builtin type (`get`, `append`, `startswith`...). `confidence: inferred`, `attrs.via: "unique_method_name"` |
 | `super().m()` | `calls` to the parent's `m` |
-| Decorator `@d(arg)` on a function | the decorated scope `calls` `d`, and also the function `d` returns (hard) |
+| Decorator `@d(arg)` on a function | the decorated scope `calls` `d`, and also the function `d` returns (`attrs.via: "return_value"`) |
+| A class body's own statements (`PATTERN = re.compile(...)`, decorators on methods) | `calls` from the class node: the class body is a scope of its own, as at runtime. Its names resolve in the class body first |
+
+**Following values (all `confidence: inferred`, with `attrs.via`).** A value's class or function is
+also known through:
+
+| `attrs.via` | How | Example |
+|---|---|---|
+| `param_default` | a parameter never reassigned is taken to be its default | `def urlencode(q, quote_via=quote_plus): quote_via(k)` |
+| `argument` | what call sites pass to a parameter: a function or class (every one passed, up to 8), or instances of a class (when all call sites agree). Followed through up to 3 calls | `apply(shout, x)` makes `fn(text)` in `apply` call `shout` |
+| `return_value` | what a function returns: a nested function, a class, or an instance | `get = self._formatter(a); get(1)`; `x = make_client(); x.send()` |
+| `attr_value` | `self.x()` where `self.x` holds a function or class (`self.x = f`, or a class attribute `x = Cls`) | `self._address_class(n)` |
+| `subclass` | `self.m()` where `m` is in neither the class nor its bases, but in its subclasses (mixins, abstract bases); each one found, up to 4 | `socketserver.ForkingMixIn` calling `self.close_request()` |
+| `callback` | a project function passed to `map`, `filter`, `sorted`, `min`, `max`, `reduce`, `re.sub`/`subn` or `list.sort` (`key=`, `repl=`) is called from the caller | `sorted(xs, key=by_name)` |
+| `class_creation` | a class statement runs its metaclass's `__prepare__`/`__new__`/`__init__`, the nearest base's `__init_subclass__`, and `__set_name__` of class attributes that have one; edges from the scope running the statement | `class Color(Enum)` calls `EnumType.__new__` |
+| `metaclass` | `Cls()` also calls `__call__` of a project metaclass | `Counted(3)` with `metaclass=Meta` |
+
+**Protocol calls.** `len(x)`, `iter`, `next`, `str`, `repr`, `int`, `float`, `bool`, `hash`, `abs`,
+`bytes`, `reversed`, `format`, and iteration (`for v in x`, `list(x)`, `tuple`, `set`, `frozenset`,
+`sorted`, `sum`, `min`, `max`, `any`, `all`) call the matching dunder on `x`'s class (`__len__`;
+`__iter__` and `__next__`) when `x` is an instance of a known project class. The edge is resolved
+like `x.__len__()` and carries `attrs.protocol` (`"len"`, `"for"`...).
 | `requests` or `httpx` `.get/head/options/post/put/patch/delete(url)` | an `external` node, id `http:<host><path>` (no scheme or query, `{}` for each variable part). URL from a literal, an f-string, a local or a module constant (also imported ones). GET/HEAD/OPTIONS → `reads`, others → `sends_to`. `attrs.method` set |
 | `db.execute("<literal SQL>")` | a `store` node per table, id `sql:<table>` (default schemas dropped, see [protocol.md](protocol.md#ids-how-graphs-from-different-tools-join-up)). `SELECT` / `JOIN` sources → `reads`; `INSERT` / `UPDATE` / `DELETE` / `CREATE` targets → `writes` |
 | Calls into third-party packages (`stripe.Charge.create()`) | none in 0.1, except the HTTP and SQL rules above |

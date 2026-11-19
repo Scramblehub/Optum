@@ -54,8 +54,8 @@ foreach(f ${PROGRAM_EXPECTED})
            COMMAND optum score ${f} ${f} --min-precision 1 --min-recall 1)
 endforeach()
 # The Python frontend against each sample program. These minimums only go up: a change that
-# makes a sample worse fails here. `dynamic` misses its 5 hard edges by design (16/21).
-set(PY_MIN_RECALL_dynamic 0.76)
+# makes a sample worse fails here. `dynamic` misses 3 of its 5 hard edges by design (18/21).
+set(PY_MIN_RECALL_dynamic 0.85)
 file(GLOB PY_PROGRAMS LIST_DIRECTORIES true ${FIXTURES}/programs/python/*)
 foreach(dir ${PY_PROGRAMS})
   if(NOT IS_DIRECTORY ${dir})
@@ -172,10 +172,12 @@ if(Python3_FOUND AND NOT NO_JSONSCHEMA)
 endif()
 
 # Runtime traces (docs/verify.md): the Python tracer runs each runnable sample, and every call it
-# observes must be in the graph, except the hard edges `dynamic` misses by design (5 of 10).
+# observes must be in the graph, except the hard edges `dynamic` misses by design, and in `flows`
+# the call a metaclass's super().__call__() makes to __init__.
 if(Python3_FOUND)
-  set(PY_VERIFY_MIN_dynamic 0.5)
-  foreach(case basic_calls:app.py classes:shapes.py imports:main.py sql_store:store.py dynamic:plugins.py shadowing:main.py)
+  set(PY_VERIFY_MIN_dynamic 0.7)
+  set(PY_VERIFY_MIN_flows 0.96)
+  foreach(case basic_calls:app.py classes:shapes.py imports:main.py sql_store:store.py dynamic:plugins.py shadowing:main.py flows:flows.py)
     string(REPLACE ":" ";" parts ${case})
     list(GET parts 0 name)
     list(GET parts 1 script)

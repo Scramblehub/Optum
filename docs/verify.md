@@ -41,7 +41,7 @@ Ids are the graph's node ids. Self-calls are ignored, and repeated pairs count o
 | How | `sys.setprofile`, every call, in-process | V8 CPU profiles: sampled, so rare calls can be missed |
 | Counted | every call made by a call instruction, direct or indirect (callbacks, dispatch tables, `getattr`) | parent → child frames of the project's named functions |
 | Left out | class bodies running, operators, property access: not calls in the source | getters and setters; frames not at a function's start |
-| Constructors | `Cls()` → the class; `super().__init__()` → that `__init__` | a constructor frame → its class, unless the graph has an explicit `super(...)` call |
+| Constructors | `Cls()` → the class actually called (read from the running `__init__`/`__new__`, so `Sub()` stays `Sub` when it inherits its constructor); `super().__init__()` → that `__init__` | a constructor frame → its class, unless the graph has an explicit `super(...)` call |
 | Ids | as the Python frontend names them, `@def` included | from the graph, by file and line |
 
 Known limit: in Python, `init = super().__init__; init(...)` is recorded as a call to the class.
@@ -51,5 +51,5 @@ Known limit: in Python, `init = super().__init__; init(...)` is recorded as a ca
 | Code | Observed calls | Recall | Notes |
 |---|---|---|---|
 | Python samples | | 100% | except `dynamic`: 50%, the 5 hard edges by design |
-| Python 3.12 standard library (`tests/tools/stdlib_workload.py`) | 537 | **70.6%** | counting indirect calls; the earlier 93.5% (260 calls) left them out |
+| Python 3.12 standard library (`tests/tools/stdlib_workload.py`) | 533 | **86.9%** | v0.1 was 70.6% (73.4% on today's trace); see the [Python note](notes/2026-11-18-python-frontend-eval.md) |
 | npm (11 offline commands) | 105 | 79.0% | most misses: commands loaded by computed name |
