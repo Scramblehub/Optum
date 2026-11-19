@@ -1,7 +1,7 @@
 import json
 
 from shop import pricing as p
-from shop.pricing import price_with_tax
+from .pricing import price_with_tax
 
 
 def place_order(items):

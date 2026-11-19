@@ -38,16 +38,25 @@ Ids are `py:` followed by the dotted path from the analysed root.
 | Code | Edge |
 |---|---|
 | Module defines function or class; class defines method; function defines nested function; package defines its submodules | `defines` |
-| `import a.b`, `from a.b import x` | `imports` to the most specific module named (`a.b`); `from a import b` where `b` is a submodule → `a.b` |
+| `import a.b`, `from a.b import x`, `from .b import x` (relative) | `imports` to the most specific module named (`a.b`); `from a import b` where `b` is a submodule → `a.b` |
 | Import of a third-party package | `imports` to its `py:<package>` node |
 | `f()` | `calls` to `f`, followed through imports and re-exports to where it's defined |
 | `Cls()` | `calls` to the class node (`data_type`). Not to `__init__` |
-| `self.m()`, `obj.m()` | `calls` to `m` on the object's class, found through inheritance; for `self` also every override in a subclass |
+| `self.m()`, `obj.m()` | `calls` to `m` on the object's class, found through inheritance; for `self` also every override in a subclass (`attrs.via: "override"`) |
+| How an object's class is known | `self`; `x = Cls()` in the same scope; `self.x = Cls()` in any method of the class; `Cls().m()` directly. Edges found through `x = Cls()` or `self.x = Cls()` are `confidence: inferred`, `attrs.via: "local_type"` |
+| `x.m()` with `x` unknown | `calls` to `m` only if exactly one project class defines `m`, and `m` isn't a dunder or a method name of a builtin type (`get`, `append`, `startswith`...). `confidence: inferred`, `attrs.via: "unique_method_name"` |
 | `super().m()` | `calls` to the parent's `m` |
 | Decorator `@d(arg)` on a function | the decorated scope `calls` `d`, and also the function `d` returns (hard) |
-| `requests.get/post/put/patch/delete(url)` | an `external` node, id `http:<host><path>` (no scheme or query, `{}` for each variable part). GET → `reads`, others → `sends_to`. `attrs.method` set |
+| `requests` or `httpx` `.get/head/options/post/put/patch/delete(url)` | an `external` node, id `http:<host><path>` (no scheme or query, `{}` for each variable part). URL from a literal, an f-string, a local or a module constant (also imported ones). GET/HEAD/OPTIONS → `reads`, others → `sends_to`. `attrs.method` set |
 | `db.execute("<literal SQL>")` | a `store` node per table, id `sql:<table>`. `SELECT` / `JOIN` sources → `reads`; `INSERT` / `UPDATE` / `DELETE` / `CREATE` targets → `writes` |
 | Calls into third-party packages (`stripe.Charge.create()`) | none in 0.1, except the HTTP and SQL rules above |
+
+### Implementation notes
+
+- Module names come from paths relative to the analysed directory. If an import doesn't match a
+  module exactly, a unique module whose name ends with it is used (for `src/`-style layouts).
+- Directories skipped: hidden ones, `__pycache__`, `node_modules`, `venv`, `site-packages`.
+- Files with syntax errors are still analysed (tree-sitter recovers); `optum graph` reports how many.
 
 ## C
 

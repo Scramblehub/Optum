@@ -8,7 +8,10 @@ After cloning: `git submodule update --init --depth 1`.
 | [nlohmann/json](https://github.com/nlohmann/json) | v3.11.3 | MIT | Reading and writing the JSON graph format |
 | [CLI11](https://github.com/CLIUtils/CLI11) | v2.4.2 | BSD-3-Clause | The `optum` command line |
 | [Catch2](https://github.com/catchorg/Catch2) | v3.7.1 | BSL-1.0 | Tests |
+| [tree-sitter](https://github.com/tree-sitter/tree-sitter) | v0.27.2 | MIT | Parsing runtime (ABI 13–15) |
+| [tree-sitter-python](https://github.com/tree-sitter/tree-sitter-python) | v0.25.0 | MIT | Python grammar (ABI 15) |
 
-Planned: tree-sitter and its grammars (`feat/frontend-python`), capstone (`exp/frontend-binary`).
+Planned: more tree-sitter grammars (JS/TS, C, SQL), capstone (`exp/frontend-binary`).
+A grammar's ABI version must be one the runtime supports; check `LANGUAGE_VERSION` in its `src/parser.c`.
 
 To upgrade one: `git -C External_Libraries/<name> fetch --depth 1 origin tag <tag> && git -C External_Libraries/<name> checkout <tag>`, then update this table and commit.

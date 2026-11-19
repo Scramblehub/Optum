@@ -1,4 +1,4 @@
-"""Imports: package, submodules, aliases, a re-exported name, a stdlib import (no node)."""
+"""Imports: package, submodules, aliases, a relative import, a re-export, a stdlib import (no node)."""
 import shop
 from shop.orders import place_order
 

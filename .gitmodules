@@ -10,3 +10,11 @@
 	path = External_Libraries/Catch2
 	url = https://github.com/catchorg/Catch2.git
 	shallow = true
+[submodule "External_Libraries/tree-sitter"]
+	path = External_Libraries/tree-sitter
+	url = https://github.com/tree-sitter/tree-sitter.git
+	shallow = true
+[submodule "External_Libraries/tree-sitter-python"]
+	path = External_Libraries/tree-sitter-python
+	url = https://github.com/tree-sitter/tree-sitter-python.git
+	shallow = true

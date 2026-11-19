@@ -4,8 +4,8 @@ Optum breaks software down into one graph of what it does, simplifies it, and re
 tool sprawl as one system the company owns. See [Optum-concept.md](Optum-concept.md) for the full
 concept and [docs/ROADMAP.md](docs/ROADMAP.md) for the build plan.
 
-Status: **pre-alpha, Phase 1.** The graph format and CLI work; no frontends yet, so `optum graph`
-returns an empty graph.
+Status: **pre-alpha, Phase 1.** The Python frontend works: `optum graph <dir>` breaks a Python
+codebase down into a graph (the Python 3.12 standard library, 285k lines, takes about 0.15 s).
 
 ## Build
 
@@ -23,7 +23,7 @@ Commands:
 
 | Command | Does |
 |---|---|
-| `optum graph <path>` | Break code down into a graph (JSON). Empty until the first frontend lands |
+| `optum graph <path> [-o out.json]` | Break code down into a graph (JSON). Python for now |
 | `optum check <files...>` | Validate graph files; errors name the exact field |
 | `optum merge <files...> [-o out.json]` | Merge graphs by node id |
 | `optum score <expected> <produced>` | Precision and recall of a produced graph against a hand-checked one |

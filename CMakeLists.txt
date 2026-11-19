@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(optum VERSION 0.0.1 LANGUAGES CXX)
+project(optum VERSION 0.0.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -21,6 +21,18 @@ endif()
 set(JSON_BuildTests OFF CACHE INTERNAL "")
 add_subdirectory(External_Libraries/json EXCLUDE_FROM_ALL)
 add_subdirectory(External_Libraries/CLI11 EXCLUDE_FROM_ALL)
+
+# tree-sitter runtime and grammars: plain C, built here rather than through their own build files.
+set(TS_DIR ${CMAKE_SOURCE_DIR}/External_Libraries/tree-sitter/lib)
+add_library(tree_sitter STATIC ${TS_DIR}/src/lib.c)
+target_include_directories(tree_sitter PUBLIC ${TS_DIR}/include PRIVATE ${TS_DIR}/src)
+target_compile_definitions(tree_sitter PRIVATE _POSIX_C_SOURCE=200112L _DEFAULT_SOURCE)
+set_target_properties(tree_sitter PROPERTIES C_STANDARD 11 POSITION_INDEPENDENT_CODE ON)
+
+set(TS_PY_DIR ${CMAKE_SOURCE_DIR}/External_Libraries/tree-sitter-python/src)
+add_library(tree_sitter_python STATIC ${TS_PY_DIR}/parser.c ${TS_PY_DIR}/scanner.c)
+target_include_directories(tree_sitter_python PRIVATE ${TS_PY_DIR})
+set_target_properties(tree_sitter_python PROPERTIES C_STANDARD 11 POSITION_INDEPENDENT_CODE ON)
 
 add_subdirectory(Core)
 
