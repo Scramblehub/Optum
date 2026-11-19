@@ -24,4 +24,11 @@ struct BinaryStats {
 Graph extract_binary_files(const std::filesystem::path& root, const std::vector<std::filesystem::path>& files,
                            BinaryStats* stats = nullptr, std::string* diagnostics = nullptr);
 
+// Developer and research aid (`optum disasm`): every function Optum finds in an ELF binary, with
+// its instructions in detail: mnemonic, operands (registers, immediates, memory operands), the
+// bytes with address-dependent fields masked as "??", and where calls and jumps go (an imported
+// function's name, another function's start, or an offset inside this function). Throws IrError
+// for files the binary frontend doesn't read.
+nlohmann::json disassemble_binary(const std::filesystem::path& file);
+
 }  // namespace optum

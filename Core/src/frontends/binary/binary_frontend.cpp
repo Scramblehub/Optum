@@ -507,6 +507,7 @@ class BinaryAnalysis {
   }
 
   void emit(Graph& g, BinaryStats& stats, LibraryIndex& libs) const;
+  nlohmann::json disassembly() const;
 
  private:
   const elf::File& f_;
@@ -965,6 +966,96 @@ void BinaryAnalysis::emit(Graph& g, BinaryStats& stats, LibraryIndex& libs) cons
 }
 
 }  // namespace
+
+nlohmann::json BinaryAnalysis::disassembly() const {
+  csh h = 0;
+  if (cs_open(CS_ARCH_X86, CS_MODE_64, &h) != CS_ERR_OK) throw IrError("capstone: cannot open x86-64");
+  cs_option(h, CS_OPT_DETAIL, CS_OPT_ON);
+  cs_insn* insn = cs_malloc(h);
+  nlohmann::json out = nlohmann::json::array();
+  for (const auto& [start, fn] : funcs_) {
+    nlohmann::json j = {{"start", hex(start)}, {"size", fn.end - start}, {"found", fn.found}};
+    if (!fn.name.empty()) j["name"] = fn.name;
+    nlohmann::json insns = nlohmann::json::array();
+    const elf::Section* sec = f_.section_at(start);
+    if (sec && fn.end > start) {
+      const auto bytes = f_.bytes(*sec);
+      const std::uint64_t off = start - sec->addr;
+      const std::uint8_t* p = bytes.data() + off;
+      std::size_t left = static_cast<std::size_t>(std::min<std::uint64_t>(fn.end - start, bytes.size() - off));
+      std::uint64_t a = start;
+      while (left > 0 && cs_disasm_iter(h, &p, &left, &a, insn)) {
+        const cs_x86& x = insn->detail->x86;
+        nlohmann::json ops = nlohmann::json::array();
+        for (std::uint8_t k = 0; k < x.op_count; ++k) {
+          const cs_x86_op& op = x.operands[k];
+          if (op.type == X86_OP_REG) {
+            ops.push_back({{"k", "reg"}, {"r", cs_reg_name(h, op.reg)}, {"s", op.size}});
+          } else if (op.type == X86_OP_IMM) {
+            ops.push_back({{"k", "imm"}, {"v", op.imm}, {"s", op.size}});
+          } else if (op.type == X86_OP_MEM) {
+            nlohmann::json m = {{"k", "mem"}, {"s", op.size}, {"disp", op.mem.disp}, {"scale", op.mem.scale}};
+            m["base"] = op.mem.base == X86_REG_INVALID ? "" : cs_reg_name(h, op.mem.base);
+            m["index"] = op.mem.index == X86_REG_INVALID ? "" : cs_reg_name(h, op.mem.index);
+            ops.push_back(std::move(m));
+          }
+        }
+        // Bytes, with fields that depend on where code and data were placed masked out:
+        // rip-relative displacements and relative branch targets.
+        std::string b;
+        static const char* kHex = "0123456789abcdef";
+        const bool rip = std::any_of(x.operands, x.operands + x.op_count,
+                                     [](const cs_x86_op& o) { return o.type == X86_OP_MEM && o.mem.base == X86_REG_RIP; });
+        const bool rel_branch = cs_insn_group(h, insn, CS_GRP_JUMP) || cs_insn_group(h, insn, CS_GRP_CALL);
+        for (std::uint16_t i = 0; i < insn->size; ++i) {
+          const bool masked = (rip && x.encoding.disp_size && i >= x.encoding.disp_offset &&
+                               i < x.encoding.disp_offset + x.encoding.disp_size) ||
+                              (rel_branch && x.encoding.imm_size && i >= x.encoding.imm_offset &&
+                               i < x.encoding.imm_offset + x.encoding.imm_size);
+          b += masked ? "??" : std::string{kHex[insn->bytes[i] >> 4], kHex[insn->bytes[i] & 15]};
+        }
+        nlohmann::json ij = {{"m", insn->mnemonic}, {"o", std::move(ops)}, {"b", std::move(b)}};
+        // Text the instruction points at (lea r, [rip+x] to a string literal): it survives
+        // recompilation at another optimisation level when the code around it doesn't.
+        for (std::uint8_t k = 0; k < x.op_count; ++k) {
+          const cs_x86_op& op = x.operands[k];
+          if (op.type == X86_OP_MEM && op.mem.base == X86_REG_RIP && op.mem.index == X86_REG_INVALID) {
+            const std::uint64_t at = insn->address + insn->size + static_cast<std::uint64_t>(op.mem.disp);
+            if (auto text = f_.string_at(at, 200); text && text->size() >= 4) ij["str"] = *text;
+          }
+        }
+        // Where a call or jump goes.
+        if (rel_branch || insn->id == X86_INS_CALL || insn->id == X86_INS_JMP) {
+          Insn rec;
+          rec.addr = insn->address;
+          rec.size = static_cast<std::uint8_t>(insn->size);
+          if (x.op_count == 1 && x.operands[0].type == X86_OP_IMM) rec.target = static_cast<std::uint64_t>(x.operands[0].imm);
+          if (x.op_count == 1 && x.operands[0].type == X86_OP_MEM && x.operands[0].mem.base == X86_REG_RIP) {
+            rec.target = insn->address + insn->size + static_cast<std::uint64_t>(x.operands[0].mem.disp);
+            rec.rip_slot = true;
+          }
+          if (auto imp = import_at(rec)) ij["to_import"] = *imp;
+          else if (!rec.rip_slot && rec.target >= start && rec.target < fn.end) ij["to_offset"] = rec.target - start;
+          else if (!rec.rip_slot && funcs_.count(rec.target)) ij["to_function"] = hex(rec.target);
+        }
+        insns.push_back(std::move(ij));
+      }
+    }
+    j["insns"] = std::move(insns);
+    out.push_back(std::move(j));
+  }
+  cs_free(insn, 1);
+  cs_close(&h);
+  return out;
+}
+
+nlohmann::json disassemble_binary(const fs::path& file) {
+  const elf::File f = elf::read(file);
+  if (f.machine != 62 || (f.type != 2 && f.type != 3)) throw IrError(file.string() + ": not an x86-64 executable or shared library");
+  BinaryAnalysis a(f, file.filename().string(), file.parent_path());
+  a.run(nullptr);
+  return {{"binary", file.string()}, {"functions", a.disassembly()}};
+}
 
 Graph extract_binary_files(const fs::path& root, const std::vector<fs::path>& files, BinaryStats* stats,
                            std::string* diagnostics) {

@@ -166,6 +166,9 @@ followed through registers and stack slots in address order:
 Arguments are read from the System V registers at each call. The ids are the same as the source
 frontends', so a compiled program and a script calling one API meet on one node.
 
+`optum disasm <binary>` (a research aid) prints every function Optum finds with its instructions,
+operands, masked bytes, referenced string literals and call targets, as JSON.
+
 **Source ids from debug info** (DWARF 4 and 5, our own reader):
 - **Which entry:** a function's id is `c:<declaring file>#<name>`. The name is the symbol's when
   there is one, so split-off pieces keep `.cold` / `.part.0`. Clones find their name and file

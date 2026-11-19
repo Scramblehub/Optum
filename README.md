@@ -35,6 +35,7 @@ Commands:
 | `optum export <graph.json> [-o out.svg]` | Draw a saved graph, or cut a smaller one from it |
 | `optum frontends [path] [--adapter cmd]` | List frontends and which files each would read |
 | `optum syntax-tree <file>` | Developer aid: the tree-sitter syntax tree of a `.py`/`.js`/`.ts`/`.c` file |
+| `optum disasm <binary>` | Research aid: an ELF binary's functions and instructions, as JSON |
 | `optum check <files...>` | Validate graph files; errors name the exact field |
 | `optum merge <files...> [-o out.json]` | Merge graphs by node id |
 | `optum score <expected> <produced>` | Precision and recall of a produced graph against a hand-checked one |
