@@ -23,10 +23,16 @@ Commands:
 
 | Command | Does |
 |---|---|
-| `optum graph <path> [-o out.json]` | Break code down into a graph (JSON). Python for now |
+| `optum graph <path> [-o out] [-f json\|dot\|svg\|mermaid]` | Break code down into a graph. Python for now |
+| `optum export <graph.json> [-o out.svg]` | Draw a saved graph, or cut a smaller one from it |
 | `optum check <files...>` | Validate graph files; errors name the exact field |
 | `optum merge <files...> [-o out.json]` | Merge graphs by node id |
 | `optum score <expected> <produced>` | Precision and recall of a produced graph against a hand-checked one |
+
+Both `graph` and `export` take view options (`--level module`, `--focus <node>`, `--edges calls,reads`,
+`--no-inferred`); see [docs/diagrams.md](docs/diagrams.md).
+
+![A small graph: functions reading from a shop API and sending to a CRM](docs/images/http_glue.svg)
 
 The graph format is documented in [docs/ir.md](docs/ir.md). Schema tests need `pip install jsonschema`.
 

@@ -927,6 +927,13 @@ Graph extract_python(const fs::path& path, PythonStats* stats, unsigned threads)
     files.push_back(path);
   }
   std::sort(files.begin(), files.end());
+  // Name modules from the outermost enclosing package: analysing .../email (which has an
+  // __init__.py) must give email.message, not message, or imports won't resolve.
+  fs::path base = fs::absolute(root).lexically_normal();
+  if (!base.has_filename()) base = base.parent_path();
+  while (fs::exists(base / "__init__.py") && base.has_parent_path() && base.parent_path() != base) {
+    base = base.parent_path();
+  }
 
   Project project;
   project.mods.resize(files.size());
@@ -937,10 +944,10 @@ Graph extract_python(const fs::path& path, PythonStats* stats, unsigned threads)
       return p;
     }();
     ModuleInfo& m = project.mods[i];
-    const fs::path rel = fs::relative(files[i], root);
+    const fs::path rel = fs::relative(fs::absolute(files[i]), base);
     m.file = rel.generic_string();
     m.name = module_name(rel, m.is_package);
-    if (m.name.empty()) m.name = fs::absolute(root).filename().string();
+    if (m.name.empty()) m.name = base.filename().string();
 
     std::ifstream in(files[i], std::ios::binary);
     std::stringstream buf;

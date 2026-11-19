@@ -53,7 +53,8 @@ Ids are `py:` followed by the dotted path from the analysed root.
 
 ### Implementation notes
 
-- Module names come from paths relative to the analysed directory. If an import doesn't match a
+- Module names come from paths relative to the analysed directory, or to the outermost package
+  around it if the directory is itself a package (analysing `.../email` gives `email.message`). If an import doesn't match a
   module exactly, a unique module whose name ends with it is used (for `src/`-style layouts).
 - Directories skipped: hidden ones, `__pycache__`, `node_modules`, `venv`, `site-packages`.
 - Files with syntax errors are still analysed (tree-sitter recovers); `optum graph` reports how many.
