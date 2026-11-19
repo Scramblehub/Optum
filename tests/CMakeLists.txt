@@ -3,7 +3,9 @@ add_executable(optum_tests
   test_ir.cpp
   test_ir_json.cpp
   test_score.cpp
+  test_python_frontend.cpp
   test_sql_http.cpp
+  test_deep_nesting.cpp
   test_view_export.cpp
   test_process.cpp
   test_frontend_robustness.cpp

@@ -118,6 +118,7 @@ class Summarizer {
  private:
   ModuleInfo& m_;
   std::string_view src_;
+  int depth_ = 0;  // recursion depth of walk()
 
   std::string text(TSNode n) const { return std::string(ts::text(n, src_)); }
   Def& def(int i) { return m_.defs[static_cast<std::size_t>(i)]; }
@@ -128,6 +129,8 @@ class Summarizer {
 
   // s: the scope new definitions and locals belong to. a: who calls count for.
   void walk(TSNode n, int s, int a) {
+    const frontends::DepthGuard guard(depth_);
+    if (guard.too_deep()) return;
     const std::string_view t = ts_node_type(n);
     if (t == "function_declaration" || t == "generator_function_declaration") {
       return on_function(n, text(ts::field(n, "name")), s, false);
@@ -586,6 +589,8 @@ class Summarizer {
   Expr to_expr(TSNode n) {
     Expr e;
     if (ts_node_is_null(n)) return e;
+    const frontends::DepthGuard guard(depth_);
+    if (guard.too_deep()) return e;
     const std::string_view t = ts_node_type(n);
     if (t == "identifier" || t == "shorthand_property_identifier") {
       e.kind = Expr::Kind::Name;

@@ -116,6 +116,7 @@ class Summarizer {
  private:
   ModuleInfo& m_;
   std::string_view src_;
+  int depth_ = 0;  // recursion depth of walk()
 
   std::string text(TSNode n) const { return std::string(ts::text(n, src_)); }
 
@@ -126,6 +127,8 @@ class Summarizer {
   // ds: the def that new definitions belong to (module, class or function).
   // as: the scope calls are attributed to and names are resolved in (function or module).
   void walk(TSNode n, int ds, int as) {
+    const frontends::DepthGuard guard(depth_);
+    if (guard.too_deep()) return;
     const char* type = ts_node_type(n);
     const std::string_view t(type);
     if (t == "function_definition") return on_function(n, ds, as);
@@ -163,6 +166,17 @@ class Summarizer {
 
   Def& def(int i) { return m_.defs[static_cast<std::size_t>(i)]; }
 
+  // `@staticmethod`: the first parameter is an ordinary argument, not the instance.
+  bool is_static(TSNode fn) const {
+    const TSNode parent = ts_node_parent(fn);
+    if (!ts::is(parent, "decorated_definition")) return false;
+    bool found = false;
+    ts::for_named(parent, [&](TSNode c) {
+      if (ts::is(c, "decorator") && ts::text(ts_node_named_child(c, 0), src_) == "staticmethod") found = true;
+    });
+    return found;
+  }
+
   void on_function(TSNode n, int ds, int as) {
     const int idx = add_def(n, text(ts::field(n, "name")), DefKind::Function, ds, as);
     const TSNode params = ts::field(n, "parameters");
@@ -178,7 +192,7 @@ class Summarizer {
         });
       }
       if (pname.empty()) return;
-      if (first && def(ds).kind == DefKind::Class) def(idx).self_name = pname;
+      if (first && def(ds).kind == DefKind::Class && !is_static(n)) def(idx).self_name = pname;
       first = false;
       def(idx).locals.insert(std::move(pname));
     });
@@ -336,6 +350,8 @@ class Summarizer {
   Expr to_expr(TSNode n) {
     Expr e;
     if (ts_node_is_null(n)) return e;
+    const frontends::DepthGuard guard(depth_);
+    if (guard.too_deep()) return e;
     const std::string_view t = ts_node_type(n);
     if (t == "identifier") {
       e.kind = Expr::Kind::Name;
@@ -484,7 +500,7 @@ class Project {
       if (const int i = find_module(b.module); i >= 0) return module_value(i);
       return is_stdlib(b.module) ? Value{} : third_party(b.module);
     }
-    const std::string full = b.module + "." + b.name;
+    const std::string full = b.module.empty() ? b.name : b.module + "." + b.name;  // `from . import x`
     if (const int i = find_module(full); i >= 0) return module_value(i);
     if (const int i = find_module(b.module); i >= 0) return resolve_member(i, b.name, depth + 1);
     return is_stdlib(b.module) ? Value{} : third_party(full);
@@ -752,7 +768,8 @@ class Linker {
     std::string target;
     std::optional<Node> node;
     if (!imp.name.empty()) {
-      if (const int i = p_.find_module(imp.module + "." + imp.name); i >= 0) target = p_.id({i, 0});
+      const std::string full = imp.module.empty() ? imp.name : imp.module + "." + imp.name;
+      if (const int i = p_.find_module(full); i >= 0) target = p_.id({i, 0});
     }
     if (target.empty()) {
       // The most specific project module named, or else the third-party package.
