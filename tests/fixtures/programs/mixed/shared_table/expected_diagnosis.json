@@ -1,0 +1,6 @@
+{
+  "about": "Answer key for optum diagnose (tests/tools/check_diagnosis.py): the findings, as kind + units + targets.",
+  "findings": [
+    {"kind": "overlapping_glue", "units": ["js:signup.js", "py:report"], "targets": ["sql:customers"]}
+  ]
+}

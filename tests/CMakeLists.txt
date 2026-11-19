@@ -195,6 +195,20 @@ if(Python3_FOUND)
   set_tests_properties(cli_verify_rejects_bad_trace PROPERTIES PASS_REGULAR_EXPRESSION "unsupported trace_version '9.0'")
 endif()
 
+# optum diagnose against its answer keys (docs/diagnose.md): planted findings, matched exactly.
+if(Python3_FOUND)
+  foreach(name crm_glue shared_table one_package)
+    set(dir ${FIXTURES}/programs/mixed/${name})
+    set(out ${CMAKE_CURRENT_BINARY_DIR}/diagnosis_${name}.json)
+    add_test(NAME diagnose_${name}
+             COMMAND sh -c "$<TARGET_FILE:optum> diagnose ${dir} -q -f json -o ${out} --adapter '${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/Core/adapters/n8n/optum_n8n.py' && ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_diagnosis.py ${out} ${dir}/expected_diagnosis.json")
+  endforeach()
+endif()
+add_test(NAME cli_diagnose_needs_input COMMAND optum diagnose)
+set_tests_properties(cli_diagnose_needs_input PROPERTIES PASS_REGULAR_EXPRESSION "give a directory to analyse, or --graph")
+add_test(NAME cli_diagnose_markdown COMMAND optum diagnose ${FIXTURES}/programs/mixed/shared_table -q)
+set_tests_properties(cli_diagnose_markdown PROPERTIES PASS_REGULAR_EXPRESSION "# Optum diagnosis.*2 tools reach sql:customers")
+
 # External adapters (docs/protocol.md). Need Python, but not jsonschema.
 if(Python3_FOUND)
   set(N8N "${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/Core/adapters/n8n/optum_n8n.py")
@@ -209,7 +223,7 @@ if(Python3_FOUND)
   endforeach()
   add_test(NAME cli_frontends_lists_adapter
            COMMAND optum frontends ${FIXTURES}/programs/mixed --adapter "${N8N}")
-  set_tests_properties(cli_frontends_lists_adapter PROPERTIES PASS_REGULAR_EXPRESSION "n8n 0.1.0  \\*.json  \\(2 files\\)")
+  set_tests_properties(cli_frontends_lists_adapter PROPERTIES PASS_REGULAR_EXPRESSION "n8n 0.1.0  \\*.json  \\([0-9]+ files\\)")
 
   # A file shaped like a workflow but with odd entries must be read, not crash the adapter.
   add_test(NAME adapter_n8n_odd_workflow

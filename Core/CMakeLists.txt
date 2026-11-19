@@ -9,6 +9,7 @@ add_library(optum_core
   src/ir_json.cpp
   src/score.cpp
   src/verify.cpp
+  src/diagnose.cpp
   src/sql.cpp
   src/http.cpp
   src/view.cpp

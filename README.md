@@ -32,6 +32,7 @@ Commands:
 | Command | Does |
 |---|---|
 | `optum graph <path> [-o out] [-f json\|dot\|svg\|mermaid]` | Break code down into a graph: Python, JS/TS, C, ELF binaries, plus any adapters |
+| `optum diagnose <path> [-f markdown\|json] [-o out]` | Report waste: tools doing the same job, with evidence and confidence ([docs/diagnose.md](docs/diagnose.md)) |
 | `optum export <graph.json> [-o out.svg]` | Draw a saved graph, or cut a smaller one from it |
 | `optum frontends [path] [--adapter cmd]` | List frontends and which files each would read |
 | `optum syntax-tree <file>` | Developer aid: the tree-sitter syntax tree of a `.py`/`.js`/`.ts`/`.c` file |

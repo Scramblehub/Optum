@@ -7,6 +7,7 @@
 #include <iostream>
 #include <optional>
 
+#include "optum/diagnose.hpp"
 #include "optum/export.hpp"
 #include "optum/frontend.hpp"
 #include "optum/frontends/binary.hpp"
@@ -169,6 +170,47 @@ std::vector<std::unique_ptr<optum::Frontend>> make_frontends(const std::vector<s
   return out;
 }
 
+// Runs every frontend (and adapter) over a path and merges the graphs; progress on stderr.
+optum::Graph build_graph(const std::string& path, const std::vector<std::string>& adapters, unsigned threads,
+                         int adapter_timeout, bool quiet) {
+  const auto frontends = make_frontends(adapters, threads, adapter_timeout);
+  const optum::Discovery d = optum::discover(path);
+  optum::Graph g;
+  g.source = path;
+  for (const auto& fe : frontends) {
+    std::vector<std::filesystem::path> mine;
+    for (const auto& f : d.files) {
+      if (optum::matches_any(fe->info().file_patterns, f)) mine.push_back(f);
+    }
+    if (mine.empty()) continue;
+    const auto start = std::chrono::steady_clock::now();
+    optum::Extraction x = fe->extract(d.root, mine);
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - start).count();
+    if (!quiet) {
+      for (std::size_t pos = 0; pos < x.diagnostics.size();) {
+        const auto nl = x.diagnostics.find('\n', pos);
+        const auto line = x.diagnostics.substr(pos, nl == std::string::npos ? std::string::npos : nl - pos);
+        if (!line.empty()) std::cerr << "[" << fe->info().name << "] " << line << "\n";
+        if (nl == std::string::npos) break;
+        pos = nl + 1;
+      }
+      std::cerr << fe->info().name << ": " << x.summary << " -> " << x.graph.nodes().size()
+                << " nodes, " << x.graph.edges().size() << " edges in " << ms << " ms\n";
+    }
+    g.merge(x.graph);
+  }
+  if (!quiet && g.nodes().empty()) {
+    std::cerr << "optum: nothing to analyse under " << path
+              << " (no Python, JS/TS, C or ELF files found); 'optum frontends " << path
+              << "' shows what each frontend reads\n";
+  }
+  if (!quiet && frontends.size() > 1) {
+    std::cerr << "merged: " << g.nodes().size() << " nodes, " << g.edges().size() << " edges\n";
+  }
+  return g;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -260,6 +302,21 @@ int main(int argc, char** argv) {
   score->add_option("--min-precision", min_precision, "Fail (exit 1) below this edge precision, 0-1");
   score->add_option("--min-recall", min_recall, "Fail (exit 1) below this edge recall, 0-1");
 
+  std::string diag_path, diag_graph, diag_format = "markdown";
+  auto* diag = app.add_subcommand("diagnose", "Report waste: overlapping tools, and what the code reaches");
+  diag->footer(
+      "Examples: optum diagnose repo/ -o report.md\n"
+      "          optum diagnose repo/ --adapter \"python3 Core/adapters/n8n/optum_n8n.py\" -f json\n"
+      "          optum diagnose --graph graph.json\n"
+      "What the report contains: docs/diagnose.md.");
+  diag->add_option("path", diag_path, "Directory or file to analyse");
+  diag->add_option("--graph", diag_graph, "Diagnose a saved graph (from optum graph) instead of analysing");
+  diag->add_option("-f,--format", diag_format, "markdown or json")->check(CLI::IsMember({"markdown", "json"}))->capture_default_str();
+  diag->add_option("-o,--out", out_path, "Output file (default: stdout)");
+  diag->add_option("-j,--threads", threads, "Worker threads; 0 = all cores");
+  diag->add_flag("-q,--quiet", quiet, "Don't print progress to stderr");
+  add_adapter_options(diag);
+
   std::string verify_graph, verify_trace;
   bool verify_json = false;
   double verify_min_recall = 0.0;
@@ -291,41 +348,7 @@ int main(int argc, char** argv) {
         return 2;
       }
       view_options(view);  // fail on a bad --edges before the (possibly long) analysis
-      const auto frontends = make_frontends(adapters, threads, adapter_timeout);
-      const optum::Discovery d = optum::discover(path);
-      optum::Graph g;
-      g.source = path;
-      for (const auto& fe : frontends) {
-        std::vector<std::filesystem::path> mine;
-        for (const auto& f : d.files) {
-          if (optum::matches_any(fe->info().file_patterns, f)) mine.push_back(f);
-        }
-        if (mine.empty()) continue;
-        const auto start = std::chrono::steady_clock::now();
-        optum::Extraction x = fe->extract(d.root, mine);
-        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            std::chrono::steady_clock::now() - start).count();
-        if (!quiet) {
-          for (std::size_t pos = 0; pos < x.diagnostics.size();) {
-            const auto nl = x.diagnostics.find('\n', pos);
-            const auto line = x.diagnostics.substr(pos, nl == std::string::npos ? std::string::npos : nl - pos);
-            if (!line.empty()) std::cerr << "[" << fe->info().name << "] " << line << "\n";
-            if (nl == std::string::npos) break;
-            pos = nl + 1;
-          }
-          std::cerr << fe->info().name << ": " << x.summary << " -> " << x.graph.nodes().size()
-                    << " nodes, " << x.graph.edges().size() << " edges in " << ms << " ms\n";
-        }
-        g.merge(x.graph);
-      }
-      if (!quiet && g.nodes().empty()) {
-        std::cerr << "optum: nothing to analyse under " << path
-                  << " (no Python, JS/TS, C or ELF files found); 'optum frontends " << path
-                  << "' shows what each frontend reads\n";
-      }
-      if (!quiet && frontends.size() > 1) {
-        std::cerr << "merged: " << g.nodes().size() << " nodes, " << g.edges().size() << " edges\n";
-      }
+      const optum::Graph g = build_graph(path, adapters, threads, adapter_timeout, quiet);
       return emit(g, view, out_path, indent);
     }
     if (*disasm_cmd) {
@@ -378,6 +401,21 @@ int main(int argc, char** argv) {
       for (const auto& f : merge_files) merged.merge(load(f));
       merged.source = merge_files.size() == 1 ? merge_files[0] : "merged";
       return write_json(optum::to_json(merged), out_path, indent);
+    }
+    if (*diag) {
+      if (diag_graph.empty() == diag_path.empty()) {
+        std::cerr << "optum: give a directory to analyse, or --graph with a saved graph (one of them)\n";
+        return 2;
+      }
+      if (!diag_path.empty() && !std::filesystem::exists(diag_path)) {
+        std::cerr << "optum: no such file or directory: " << diag_path << " (check the path)\n";
+        return 2;
+      }
+      const optum::Graph g = diag_graph.empty() ? build_graph(diag_path, adapters, threads, adapter_timeout, quiet)
+                                                : load(diag_graph);
+      const optum::Diagnosis d = optum::diagnose(g);
+      if (diag_format == "json") return write_json(optum::to_json(d), out_path, indent);
+      return write_text(optum::to_markdown(d), out_path);
     }
     if (*verify_cmd) {
       std::ifstream in(verify_trace);

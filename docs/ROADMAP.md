@@ -100,7 +100,7 @@ The plan, with answer keys for every analysis: [plans/phase2.md](plans/phase2.md
 | `feat/analysis-dead` | Unreachable functions, unused modules, unused external endpoints | 3 days |
 | `feat/analysis-dupes` | Duplicated logic: normalize function bodies to skeletons and cluster them (the CGL structure-memory idea, in a simple first form) | 1–2 weeks |
 | `feat/analysis-entities` | Find the same entity in several places (a `Customer` class, a `customers` table, a CRM payload) and propose one definition | 1 week |
-| `feat/report` | `optum diagnose`: one report listing waste, priced where it can be (lines, endpoints, duplicated stores) | 3 days |
+| `feat/report` | `optum diagnose`: one report listing waste, priced where it can be (lines, endpoints, duplicated stores). Started as `feat/diagnose`: report frame and overlapping glue ([docs/diagnose.md](diagnose.md)) | 3 days |
 | `feat/rewrite-one` | One automatic fix end to end, e.g. merge duplicated functions, gated by the fixture tests passing before and after | 1–2 weeks |
 
 **Gate v0.2:** on a real repo, the report finds duplications a person agrees with, and one
