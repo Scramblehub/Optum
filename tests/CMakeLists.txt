@@ -212,6 +212,11 @@ set_tests_properties(cli_diagnose_needs_input PROPERTIES PASS_REGULAR_EXPRESSION
 add_test(NAME cli_diagnose_markdown COMMAND optum diagnose ${FIXTURES}/programs/mixed/shared_table -q)
 set_tests_properties(cli_diagnose_markdown PROPERTIES PASS_REGULAR_EXPRESSION "# Optum diagnosis.*2 tools reach sql:customers")
 
+# The test company's data generator (testco/README.md): deterministic, traps in place.
+if(Python3_FOUND)
+  add_test(NAME testco_generator COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_testco_data.py)
+endif()
+
 # The first automatic fix (docs/fixes.md): merge exact duplicates, gated by the sample's tests.
 if(Python3_FOUND)
   foreach(mode apply dry revert)
