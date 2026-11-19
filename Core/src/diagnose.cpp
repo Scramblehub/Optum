@@ -5,6 +5,7 @@
 #include "test_code.hpp"
 
 #include <algorithm>
+#include <fstream>
 #include <cmath>
 #include <tuple>
 #include <map>
@@ -63,6 +64,13 @@ bool called_by_name(const std::string& name, bool method) {
   return std::any_of(std::begin(kHooks), std::end(kHooks), [&](const char* h) { return name.starts_with(h); });
 }
 
+std::string area_words(const std::string& area) {
+  if (area == "vendored") return "vendored code (vendor/, third_party/, deps/...)";
+  if (area == "build") return "build output (dist/, build/, minified files)";
+  if (area == "example") return "examples (examples/, samples/, demo/)";
+  return "generated files";
+}
+
 bool outside(const Node& n) {
   return n.kind == NodeKind::External || n.kind == NodeKind::Store;
 }
@@ -70,7 +78,27 @@ bool outside(const Node& n) {
 // Definitions nothing in the project uses: local (unreachable by name from outside the project),
 // never called by other code, and whose name appears nowhere else (attrs.referenced). Then
 // definitions only test code calls. One finding of each kind per component.
-void unused_code(const Graph& g, const std::vector<NodeIndex>& unit, std::vector<Finding>& out) {
+void unused_code(const Graph& g, const std::vector<NodeIndex>& unit, std::vector<Finding>& out,
+                 const std::filesystem::path& source_root, std::vector<std::string>& notes) {
+  std::map<std::string, int> left_out;
+  std::map<std::string, bool> generated_file;  // by location file, read once
+  auto generated = [&](const std::string& file) {
+    auto [it, fresh] = generated_file.try_emplace(file, false);
+    if (fresh && !source_root.empty()) {
+      for (std::filesystem::path base = source_root; !base.empty(); base = base.parent_path()) {
+        std::ifstream in(base / file, std::ios::binary);
+        if (in) {
+          std::string head(800, '\0');
+          in.read(head.data(), static_cast<std::streamsize>(head.size()));
+          head.resize(static_cast<std::size_t>(in.gcount()));
+          it->second = generated_header(head);
+          break;
+        }
+        if (base == base.parent_path()) break;
+      }
+    }
+    return it->second;
+  };
   std::vector<NodeIndex> parent(g.nodes().size());
   for (NodeIndex i = 0; i < parent.size(); ++i) parent[i] = i;
   for (const Edge& e : g.edges()) {
@@ -97,12 +125,23 @@ void unused_code(const Graph& g, const std::vector<NodeIndex>& unit, std::vector
     const bool method = g.node(parent[i]).kind == NodeKind::DataType;
     if (called_by_name(n.name, method)) continue;
     if (product_callers[i] > 0) continue;
+    if (n.loc) {  // not the project's own code: vendored, build output, examples, generated
+      const std::string area = code_area(n.loc->file);
+      if (!area.empty() || generated(n.loc->file)) {
+        ++left_out[area.empty() ? "generated" : area];
+        continue;
+      }
+    }
     // Inside something already reported: the outer definition says it.
     bool inside = false;
     for (NodeIndex p = parent[i]; p != parent[p] && !inside; p = parent[p]) inside = reported[p];
     if (inside) continue;
     reported[i] = true;
     by_component[component_of(g.node(unit[i]))].push_back({i, callers[i] > 0 || n.attrs.value("referenced_by_tests", false)});
+  }
+  for (const auto& [area, k] : left_out) {
+    notes.push_back(std::to_string(k) + " unused-looking definition(s) in " + area_words(area) +
+                    " left out: not the project's own code to change");
   }
   for (const bool test_only : {false, true}) {
     for (const auto& [component, hits] : by_component) {
@@ -264,7 +303,7 @@ Diagnosis diagnose(const Graph& g, const std::filesystem::path& source_root) {
     f.evidence = {{"targets", nlohmann::json::array({{{"target", t.id}, {"uses", uses}}})}};
     d.findings.push_back(std::move(f));
   }
-  unused_code(g, unit, d.findings);
+  unused_code(g, unit, d.findings, source_root, d.notes);
 
   // The same data in several places: classes, tables and API payloads with matching fields.
   const EntityResult entities = find_entities(g);
@@ -311,7 +350,23 @@ Diagnosis diagnose(const Graph& g, const std::filesystem::path& source_root) {
   // Duplicated logic: clone groups found from the source (docs/diagnose.md).
   std::error_code ec;
   if (!source_root.empty() && std::filesystem::exists(source_root, ec)) {
-    for (const CloneGroup& cg : find_clones(g, source_root)) {
+    std::map<std::string, int> left_out;  // groups with no member in the project's own code
+    for (CloneGroup cg : find_clones(g, source_root)) {
+      // Copies in build output, examples or generated files aren't the project's to merge: they
+      // drop out. Vendored copies stay when the project's own code copies them (import instead).
+      auto reason = [](const CloneMember& m) { return m.generated ? std::string("generated") : m.area; };
+      std::string dropped;
+      std::erase_if(cg.members, [&](const CloneMember& m) {
+        const std::string r = reason(m);
+        if (r.empty() || r == "vendored") return false;
+        dropped = r;
+        return true;
+      });
+      const bool own = std::any_of(cg.members.begin(), cg.members.end(), [&](const CloneMember& m) { return reason(m).empty(); });
+      if (!own || cg.members.size() < 2) {
+        ++left_out[!own && !cg.members.empty() ? reason(cg.members.front()) : dropped];
+        continue;
+      }
       Finding f;
       f.kind = "duplicated_logic";
       std::set<std::string> comps;
@@ -334,6 +389,10 @@ Diagnosis diagnose(const Graph& g, const std::filesystem::path& source_root) {
       f.evidence = {{"clone_type", cg.type}, {"similarity", std::round(cg.similarity * 100) / 100},
                     {"members", members}, {"lines_saved", total - most}};
       d.findings.push_back(std::move(f));
+    }
+    for (const auto& [area, n] : left_out) {
+      d.notes.push_back(std::to_string(n) + " duplicate group(s) only in " + area_words(area) +
+                        " left out: not the project's own code to change");
     }
   }
 
