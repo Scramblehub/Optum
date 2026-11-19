@@ -75,6 +75,8 @@ module's `what`.
 ### Not yet
 
 Methods (a shared base class or a mixin would be the fix), near copies (they need a merged
-version, not one kept), and other languages. The v0.2 gate also asks for a merge on a real
-repository with all its tests passing: that needs a real project with duplicates and a test
-suite, from the interviews or Phase 3's test company.
+version, not one kept), and other languages.
+
+On nine real projects ([note](notes/2026-11-19-real-repos.md)) it found 1 safe merge, in sympy,
+applied with sympy's `printing` tests passing before and after (1,112 tests); every other exact
+copy was refused for a right reason, mostly methods.
