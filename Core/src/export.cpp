@@ -65,14 +65,12 @@ const char* shape_name(NodeKind k) {
   return "";
 }
 
-std::string escape(const std::string& s, bool html) {
+// Escapes a string for use inside a double-quoted DOT string.
+std::string escape(const std::string& s) {
   std::string out;
   for (char c : s) {
-    if (html && c == '&') out += "&amp;";
-    else if (html && c == '<') out += "&lt;";
-    else if (html && c == '>') out += "&gt;";
-    else if (!html && (c == '"' || c == '\\')) out += std::string("\\") + c;
-    else out += c;
+    if (c == '"' || c == '\\') out += '\\';
+    out += c;
   }
   return out;
 }
@@ -162,7 +160,7 @@ std::string to_dot(const Graph& g) {
   std::string out = "digraph optum {\n";
   out += "  graph [rankdir=LR, fontname=\"Helvetica\", fontsize=11, bgcolor=\"" + std::string(kSurface) +
          "\", nodesep=0.25, ranksep=0.7, labelloc=t, labeljust=l, fontcolor=\"" + kInk2 +
-         "\", label=\"" + escape(g.source, false) + "\"];\n";
+         "\", label=\"" + escape(g.source) + "\"];\n";
   out += "  node [fontname=\"Helvetica\", fontsize=10, color=\"" + std::string(kInk2) +
          "\", fontcolor=\"" + kInk + "\", style=\"filled\", fillcolor=\"#ffffff\", penwidth=1];\n";
   out += "  edge [fontname=\"Helvetica\", fontsize=9, fontcolor=\"" + std::string(kInk2) +
@@ -173,9 +171,9 @@ std::string to_dot(const Graph& g) {
     std::string style = "filled";
     if (n.kind == NodeKind::Function) style += ",rounded";
     if (n.confidence == Confidence::Inferred) style += ",dashed";
-    std::string line = indent + "\"" + escape(n.id, false) + "\" [label=\"" +
-                       escape(label_of(g, i, l.module[i]), false) + "\", shape=" + dot_shape(n.kind) +
-                       ", style=\"" + style + "\", tooltip=\"" + escape(tooltip_of(n), false) + "\"";
+    std::string line = indent + "\"" + escape(n.id) + "\" [label=\"" +
+                       escape(label_of(g, i, l.module[i])) + "\", shape=" + dot_shape(n.kind) +
+                       ", style=\"" + style + "\", tooltip=\"" + escape(tooltip_of(n)) + "\"";
     if (n.kind == NodeKind::DataType) line += ", peripheries=2";
     return line + "];\n";
   };
@@ -183,7 +181,7 @@ std::string to_dot(const Graph& g) {
   int c = 0;
   for (const auto& [mod, members] : l.clusters) {
     out += "  subgraph \"cluster_" + std::to_string(c++) + "\" {\n";
-    out += "    label=\"" + escape(label_of(g, mod, mod), false) + "\"; style=\"rounded\"; color=\"" +
+    out += "    label=\"" + escape(label_of(g, mod, mod)) + "\"; style=\"rounded\"; color=\"" +
            kClusterLine + "\"; fontcolor=\"" + kInk2 + "\";\n";
     for (NodeIndex i : members) out += node_line(i, "    ");
     out += "  }\n";
@@ -198,11 +196,11 @@ std::string to_dot(const Graph& g) {
     if (e.attrs.contains("count") && e.attrs["count"].is_number() && e.attrs["count"].get<int>() > 1) {
       label += (label.empty() ? "" : " ") + std::string("×") + std::to_string(e.attrs["count"].get<int>());
     }
-    if (!label.empty()) attrs += ", label=\"" + escape(label, false) + "\"";
+    if (!label.empty()) attrs += ", label=\"" + escape(label) + "\"";
     if (e.confidence == Confidence::Inferred) attrs += ", style=dotted";
     else if (s.dashed) attrs += ", style=dashed";
     if (s.bold) attrs += ", penwidth=2.4";
-    out += "  \"" + escape(g.node(e.from).id, false) + "\" -> \"" + escape(g.node(e.to).id, false) +
+    out += "  \"" + escape(g.node(e.from).id) + "\" -> \"" + escape(g.node(e.to).id) +
            "\" [" + attrs + "];\n";
   }
   if (!g.nodes().empty()) out += legend_dot(g);
