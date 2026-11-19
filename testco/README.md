@@ -44,3 +44,21 @@ same order. Deterministic for a seed. The traps for record matching:
 
 Every order is a shop order, a payment, and an invoice in accounting. Invoices are tax documents:
 `"regulated": "tax"`, never merged or rewritten.
+
+## Loading it into the tools
+
+```sh
+python3 testco/load.py                       # through the proxy, so it's recorded (~2 min)
+python3 testco/check_regulated.py snapshot   # fingerprint every posted invoice
+python3 testco/check_regulated.py verify     # later: exit 1 if any tax document changed
+```
+
+- **Accounting** becomes a UK company (GBP, VAT 20% included in prices, as shop prices are), with
+  its customers and 2,000 **posted** invoices; every total matches its order.
+- **Payments** (stripe-mock keeps nothing): 300 checkout calls, as recorded traffic.
+- `data/ids.json` maps each generated record to the id the live tool gave it, for checking what
+  Optum finds against the ground truth. Optum never reads it, nor `ground_truth.json`.
+
+Why `check_regulated.py`: Odoo locks a posted invoice's partner and date, but its API still lets
+the total and line prices be overwritten. A tool's own locking isn't evidence that tax documents
+are untouched; a fingerprint before a stage and a comparison after are.
