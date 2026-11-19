@@ -27,6 +27,8 @@ struct CloneMember {
   std::string id;    // the function node
   std::string file;  // as in the node's location
   std::uint32_t line = 0, lines = 0, tokens = 0;
+  std::string area;        // "" for the project's own code, else vendored / build / example (code_area)
+  bool generated = false;  // its file says it's generated
 };
 
 struct CloneGroup {

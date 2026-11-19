@@ -1,10 +1,69 @@
 {
-  "about": "Answer key for optum diagnose: planted duplicated logic. A: an exact copy (Python). B: a copy with every name and value renamed (Python). C: a copy with small edits (Python). D: a renamed copy (JS). E: near copies (C). Decoys that must not be reported: functions with the same idioms but different logic (order_summary, count_words), tiny look-alike helpers (get_name, get_sku), and a copy in test code.",
+  "about": "Answer key for optum diagnose: planted duplicated logic. A: an exact copy (Python). B: a copy with every name and value renamed (Python). C: a copy with small edits (Python). D: a renamed copy (JS). E: near copies (C). Decoys that must not be reported: functions with the same idioms but different logic (order_summary, count_words), tiny look-alike helpers (get_name, get_sku), and a copy in test code. Not the project's own code: copies inside a vendored library (vendor/), between examples (examples/), and in generated files are left out; the project's own copy of a vendored function is reported, with the vendored copies (import it instead).",
   "findings": [
-    {"kind": "duplicated_logic", "units": ["py:legacy", "py:shop"], "targets": ["py:legacy.totals.old_invoice_total", "py:shop.pricing.invoice_total"]},
-    {"kind": "duplicated_logic", "units": ["py:shop"], "targets": ["py:shop.addresses.read_address", "py:shop.pricing.parse_shipping_address"]},
-    {"kind": "duplicated_logic", "units": ["py:legacy", "py:shop"], "targets": ["py:legacy.stock.stock_warnings", "py:shop.pricing.stock_alerts"]},
-    {"kind": "duplicated_logic", "units": ["js:web"], "targets": ["js:web/cart.js#normalizeItems", "js:web/checkout.js#cleanItems"]},
-    {"kind": "duplicated_logic", "units": ["c:native"], "targets": ["c:native/sum.c#checksum_v1", "c:native/sum.c#checksum_v2"]}
+    {
+      "kind": "duplicated_logic",
+      "units": [
+        "py:legacy",
+        "py:shop"
+      ],
+      "targets": [
+        "py:legacy.totals.old_invoice_total",
+        "py:shop.pricing.invoice_total"
+      ]
+    },
+    {
+      "kind": "duplicated_logic",
+      "units": [
+        "py:shop"
+      ],
+      "targets": [
+        "py:shop.addresses.read_address",
+        "py:shop.pricing.parse_shipping_address"
+      ]
+    },
+    {
+      "kind": "duplicated_logic",
+      "units": [
+        "py:legacy",
+        "py:shop"
+      ],
+      "targets": [
+        "py:legacy.stock.stock_warnings",
+        "py:shop.pricing.stock_alerts"
+      ]
+    },
+    {
+      "kind": "duplicated_logic",
+      "units": [
+        "js:web"
+      ],
+      "targets": [
+        "js:web/cart.js#normalizeItems",
+        "js:web/checkout.js#cleanItems"
+      ]
+    },
+    {
+      "kind": "duplicated_logic",
+      "units": [
+        "c:native"
+      ],
+      "targets": [
+        "c:native/sum.c#checksum_v1",
+        "c:native/sum.c#checksum_v2"
+      ]
+    },
+    {
+      "kind": "duplicated_logic",
+      "units": [
+        "py:shop",
+        "py:vendor"
+      ],
+      "targets": [
+        "py:shop.urls.make_slug",
+        "py:vendor.textkit.slug.slugify",
+        "py:vendor.textkit.slug.slugify_legacy"
+      ]
+    }
   ]
 }

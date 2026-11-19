@@ -114,7 +114,8 @@ class Shaper {
 // ----------------------------------------------------------------------------------- functions
 
 struct Fn {
-  std::string id, file;
+  std::string id, file, area;
+  bool generated = false;
   std::uint32_t line = 0, lines = 0;
   Shape shape;
   std::unordered_map<std::uint64_t, std::uint32_t> features;  // structure memory: subtree -> count
@@ -204,6 +205,7 @@ std::vector<CloneGroup> find_clones(const Graph& g, const fs::path& root, const 
     std::stringstream ss;
     ss << in.rdbuf();
     const std::string src = ss.str();
+    const bool generated = generated_header(src);
     ts_parser_set_language(parser.get(), lang);
     ts::TreePtr tree(ts_parser_parse_string(parser.get(), nullptr, src.data(), static_cast<uint32_t>(src.size())));
     std::map<std::uint32_t, TSNode> starts;
@@ -220,6 +222,8 @@ std::vector<CloneGroup> find_clones(const Graph& g, const fs::path& root, const 
       if (fn.shape.tokens < opts.min_tokens) continue;
       fn.id = n.id;
       fn.file = file;
+      fn.area = code_area(file);
+      fn.generated = generated;
       fn.line = n.loc->line;
       fn.lines = n.loc->end_line - n.loc->line + 1;
       for (std::uint64_t f : shaper.features) ++fn.features[f];
@@ -352,7 +356,10 @@ std::vector<CloneGroup> find_clones(const Graph& g, const fs::path& root, const 
     }
     cg.type = !same_norm ? "similar" : same_exact ? "exact" : "renamed";
     cg.similarity = low;
-    for (std::size_t k : ks) cg.members.push_back({fns[k].id, fns[k].file, fns[k].line, fns[k].lines, fns[k].shape.tokens});
+    for (std::size_t k : ks) {
+      cg.members.push_back({fns[k].id, fns[k].file, fns[k].line, fns[k].lines, fns[k].shape.tokens, fns[k].area,
+                            fns[k].generated});
+    }
     std::sort(cg.members.begin(), cg.members.end(), [](const auto& x, const auto& y) { return x.id < y.id; });
     out.push_back(std::move(cg));
   }

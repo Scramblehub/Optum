@@ -128,6 +128,7 @@ EntityResult find_entities(const Graph& g) {
   for (NodeIndex i = 0; i < g.nodes().size(); ++i) {
     const Node& n = g.node(i);
     if (n.kind != NodeKind::DataType || !n.attrs.contains("fields") || is_test_code(n.id)) continue;
+    if (n.loc && !code_area(n.loc->file).empty()) continue;  // vendored, build output, examples
     EntityShape& s = shapes[n.id];
     s.id = n.id;
     s.kind = "class";
