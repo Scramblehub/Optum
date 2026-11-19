@@ -48,7 +48,7 @@ Ids are `py:` followed by the dotted path from the analysed root.
 | `super().m()` | `calls` to the parent's `m` |
 | Decorator `@d(arg)` on a function | the decorated scope `calls` `d`, and also the function `d` returns (hard) |
 | `requests` or `httpx` `.get/head/options/post/put/patch/delete(url)` | an `external` node, id `http:<host><path>` (no scheme or query, `{}` for each variable part). URL from a literal, an f-string, a local or a module constant (also imported ones). GET/HEAD/OPTIONS → `reads`, others → `sends_to`. `attrs.method` set |
-| `db.execute("<literal SQL>")` | a `store` node per table, id `sql:<table>`. `SELECT` / `JOIN` sources → `reads`; `INSERT` / `UPDATE` / `DELETE` / `CREATE` targets → `writes` |
+| `db.execute("<literal SQL>")` | a `store` node per table, id `sql:<table>` (default schemas dropped, see [protocol.md](protocol.md#ids-how-graphs-from-different-tools-join-up)). `SELECT` / `JOIN` sources → `reads`; `INSERT` / `UPDATE` / `DELETE` / `CREATE` targets → `writes` |
 | Calls into third-party packages (`stripe.Charge.create()`) | none in 0.1, except the HTTP and SQL rules above |
 
 ### Implementation notes
@@ -76,8 +76,33 @@ Ids are `py:` followed by the dotted path from the analysed root.
 Binaries (`exp/frontend-binary`) map recovered functions to the same `c:` ids through debug
 symbols where possible, so the binary graph can be scored against the source graph.
 
+## n8n (external adapter)
+
+[Core/adapters/n8n/optum_n8n.py](../Core/adapters/n8n/optum_n8n.py), run with
+`--adapter "python3 Core/adapters/n8n/optum_n8n.py"`. Reads n8n workflow exports (one workflow, or
+a list of them, per `.json` file); other JSON is skipped.
+
+| Thing | Node | Id example |
+|---|---|---|
+| Workflow | `program`, `attrs.active` | `n8n:wf-order-crm` (the workflow's id, else the file name) |
+| n8n node | `step`, `attrs.type`, `attrs.trigger` for triggers | `n8n:wf-order-crm/Create deal` |
+| SaaS integration (Slack, HubSpot...) | `external`, `attrs.service` | `saas:slack` |
+
+| Workflow content | Edge |
+|---|---|
+| Workflow contains step | `defines` |
+| Connection A → B (any output) | `triggers` |
+| HTTP Request step | `reads` (GET/HEAD/OPTIONS) or `sends_to` to `http:...`; `{{ expressions }}` in the URL become `{}` and make it `inferred` |
+| Postgres / MySQL / MSSQL step with a table | `reads` (select) or `writes` (insert, update, upsert, delete) to `sql:<table>`. Raw `executeQuery` isn't analysed yet (reported on stderr) |
+| Any other non-core node type | `reads` (get/getAll/search operations) or `sends_to` to `saas:<service>` |
+
+Logic and plumbing nodes (If, Switch, Set, Code, Merge, Wait, triggers, sticky notes...) are steps
+with no outside edges.
+
 ## Known gaps (0.1)
 
 - No `extends` edge for inheritance: the graph can't yet say "Square is a Shape". Candidate for
   IR 0.2.
 - Class attributes, globals and module constants (`HANDLERS`, `SHOP`) aren't nodes.
+- n8n: Code nodes' JavaScript and raw SQL queries aren't analysed; sub-workflow calls
+  (`executeWorkflow`) aren't linked to the called workflow yet.

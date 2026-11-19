@@ -19,6 +19,7 @@
 #include <unordered_set>
 
 #include "../../ts_util.hpp"
+#include "optum/frontend.hpp"
 #include "optum/http.hpp"
 #include "optum/sql.hpp"
 
@@ -829,7 +830,7 @@ class Linker {
     if (t.reads.empty() && t.writes.empty()) return false;
     auto store = [&](const std::string& table, EdgeKind kind) {
       Node n;
-      n.id = "sql:" + table;
+      n.id = sql_store_id(table);
       n.kind = NodeKind::Store;
       n.name = table;
       n.frontend = "python";
@@ -871,12 +872,6 @@ class Linker {
 
 // ===================================================================== driver
 
-bool skip_dir(const fs::path& p) {
-  const std::string name = p.filename().string();
-  return name.starts_with(".") || name == "__pycache__" || name == "node_modules" || name == "venv" ||
-         name == "site-packages";
-}
-
 std::string module_name(const fs::path& rel, bool& is_package) {
   fs::path no_ext = rel;
   no_ext.replace_extension();
@@ -910,23 +905,22 @@ void parallel_for(std::size_t n, unsigned threads, F&& f) {
 }  // namespace
 
 Graph extract_python(const fs::path& path, PythonStats* stats, unsigned threads) {
-  fs::path root;
-  std::vector<fs::path> files;
-  if (fs::is_directory(path)) {
-    root = path;
-    for (auto it = fs::recursive_directory_iterator(path, fs::directory_options::skip_permission_denied);
-         it != fs::recursive_directory_iterator(); ++it) {
-      if (it->is_directory() && skip_dir(it->path())) {
-        it.disable_recursion_pending();
-      } else if (it->is_regular_file() && it->path().extension() == ".py") {
-        files.push_back(it->path());
-      }
-    }
-  } else {
-    root = path.parent_path();
-    files.push_back(path);
+  Discovery d = discover(path);
+  std::vector<fs::path> py;
+  for (auto& f : d.files) {
+    if (f.extension() == ".py") py.push_back(std::move(f));
   }
+  Graph g = extract_python_files(d.root, py, stats, threads);
+  g.source = path.string();
+  return g;
+}
+
+Graph extract_python_files(const fs::path& root, const std::vector<fs::path>& rel_files,
+                           PythonStats* stats, unsigned threads) {
+  std::vector<fs::path> files;
+  for (const auto& f : rel_files) files.push_back(root / f);
   std::sort(files.begin(), files.end());
+  const fs::path& path = root;
   // Name modules from the outermost enclosing package: analysing .../email (which has an
   // __init__.py) must give email.message, not message, or imports won't resolve.
   fs::path base = fs::absolute(root).lexically_normal();

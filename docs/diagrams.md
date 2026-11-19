@@ -20,7 +20,7 @@ and scripts the same cut a person sees in a diagram.
 
 | Option | Does |
 |---|---|
-| `--level module` | Collapses everything into its module; parallel edges merge, with `attrs.count` (drawn as `×3`) |
+| `--level module` | Collapses everything into its module (or program, such as a workflow); parallel edges merge, with `attrs.count` (drawn as `×3`) |
 | `--focus <node>` | Keeps one node, everything within `--depth` edges of it (default 1), and their modules. The node can be its full id or a unique ending (`place_order`, `Shape.area`); an ambiguous one lists the candidates |
 | `--edges a,b` | Only these edge kinds. Containment (`defines`) is always kept, for grouping |
 | `--no-inferred` | Leaves out guessed edges |
@@ -37,7 +37,7 @@ Node kinds are told apart by **shape**:
 | rounded box | function |
 | double box | class / data type |
 | folder | module (when it has nothing shown inside it) |
-| grey rounded frame | a module, containing its functions and classes |
+| grey rounded frame | a module or program (e.g. a workflow), containing its functions, classes or steps |
 | cylinder | data store (database table) |
 | hexagon | external API |
 | arrow | workflow step |

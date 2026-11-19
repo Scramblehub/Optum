@@ -22,6 +22,13 @@ TEST_CASE("sql: reads and writes by statement type") {
   REQUIRE(sql_tables("SELECT * FROM (SELECT 1) sub").reads.empty());
 }
 
+TEST_CASE("sql: store ids drop default schemas only") {
+  REQUIRE(optum::sql_store_id("orders") == "sql:orders");
+  REQUIRE(optum::sql_store_id("public.orders") == "sql:orders");
+  REQUIRE(optum::sql_store_id("DBO.Orders") == "sql:Orders");
+  REQUIRE(optum::sql_store_id("sales.orders") == "sql:sales.orders");
+}
+
 TEST_CASE("sql: non-SQL text gives nothing") {
   const auto t = sql_tables("from here to there");
   REQUIRE(t.reads.empty());
@@ -41,4 +48,21 @@ TEST_CASE("http: unknown host or no scheme gives nothing") {
   REQUIRE(http_node_id("https://{}/orders").empty());
   REQUIRE(http_node_id("ftp://example.com/x").empty());
   REQUIRE(http_node_id("/api/orders").empty());
+}
+
+#include <fstream>
+#include <nlohmann/json.hpp>
+
+TEST_CASE("shared id cases (also checked against every adapter)") {
+  std::ifstream in(OPTUM_FIXTURES "/ids/url_cases.json");
+  REQUIRE(in);
+  const auto cases = nlohmann::json::parse(in);
+  for (const auto& c : cases["cases"]) {
+    INFO(c[0].get<std::string>());
+    REQUIRE(http_node_id(c[0].get<std::string>()) == c[1].get<std::string>());
+  }
+  for (const auto& c : cases["sql_cases"]) {
+    INFO(c[0].get<std::string>());
+    REQUIRE(optum::sql_store_id(c[0].get<std::string>()) == c[1].get<std::string>());
+  }
 }

@@ -1,0 +1,30 @@
+{
+  "id": "wf-order-crm",
+  "name": "Order to CRM",
+  "active": true,
+  "nodes": [
+    { "id": "a1", "name": "Every 15 minutes", "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.2, "position": [0, 0],
+      "parameters": { "rule": { "interval": [ { "field": "minutes", "minutesInterval": 15 } ] } } },
+    { "id": "a2", "name": "Get new orders", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [220, 0],
+      "parameters": { "method": "GET", "url": "https://shop.example.com/api/orders", "options": {} } },
+    { "id": "a3", "name": "Only paid", "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [440, 0],
+      "parameters": { "conditions": { "conditions": [ { "leftValue": "={{ $json.status }}", "rightValue": "paid", "operator": { "type": "string", "operation": "equals" } } ] } } },
+    { "id": "a4", "name": "Create deal", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [660, -100],
+      "parameters": { "method": "POST", "url": "https://crm.example.com/api/deals", "sendBody": true, "options": {} } },
+    { "id": "a5", "name": "Mark deal won", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [880, -100],
+      "parameters": { "method": "PATCH", "url": "=https://crm.example.com/api/deals/{{ $json.deal_id }}", "options": {} } },
+    { "id": "a6", "name": "Log order", "type": "n8n-nodes-base.postgres", "typeVersion": 2.5, "position": [660, 100],
+      "parameters": { "operation": "insert", "schema": { "__rl": true, "value": "public", "mode": "list" }, "table": { "__rl": true, "value": "orders", "mode": "list" } } },
+    { "id": "a7", "name": "Notify sales", "type": "n8n-nodes-base.slack", "typeVersion": 2.2, "position": [1100, -100],
+      "parameters": { "operation": "post", "select": "channel", "channelId": { "__rl": true, "value": "#sales", "mode": "name" }, "text": "=New deal: {{ $json.title }}" } },
+    { "id": "a8", "name": "Note", "type": "n8n-nodes-base.stickyNote", "typeVersion": 1, "position": [0, 300],
+      "parameters": { "content": "Runs every 15 minutes. Owner: ops." } }
+  ],
+  "connections": {
+    "Every 15 minutes": { "main": [ [ { "node": "Get new orders", "type": "main", "index": 0 } ] ] },
+    "Get new orders": { "main": [ [ { "node": "Only paid", "type": "main", "index": 0 } ] ] },
+    "Only paid": { "main": [ [ { "node": "Create deal", "type": "main", "index": 0 }, { "node": "Log order", "type": "main", "index": 0 } ], [] ] },
+    "Create deal": { "main": [ [ { "node": "Mark deal won", "type": "main", "index": 0 } ] ] },
+    "Mark deal won": { "main": [ [ { "node": "Notify sales", "type": "main", "index": 0 } ] ] }
+  }
+}

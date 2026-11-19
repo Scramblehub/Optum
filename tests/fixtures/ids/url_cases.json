@@ -1,0 +1,21 @@
+{
+  "about": "URL -> external node id. Checked against both the C++ helper (optum::http_node_id) and every adapter that reimplements it, so all frontends name the same API the same way.",
+  "cases": [
+    ["https://shop.example.com/api/orders", "http:shop.example.com/api/orders"],
+    ["https://API.Example.com:443/v1/deals/{}?x=1#f", "http:api.example.com/v1/deals/{}"],
+    ["http://localhost:8080/", "http:localhost:8080"],
+    ["http://example.com:80/a", "http:example.com/a"],
+    ["https://crm.example.com/api/deals/", "http:crm.example.com/api/deals"],
+    ["https://example.com", "http:example.com"],
+    ["{}/orders", ""],
+    ["https://{}/orders", ""],
+    ["/api/orders", ""],
+    ["ftp://example.com/x", ""]
+  ],
+  "sql_cases": [
+    ["orders", "sql:orders"],
+    ["public.orders", "sql:orders"],
+    ["DBO.Orders", "sql:Orders"],
+    ["sales.orders", "sql:sales.orders"]
+  ]
+}

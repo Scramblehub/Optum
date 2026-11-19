@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <vector>
 
 #include "optum/ir.hpp"
 
@@ -19,5 +20,10 @@ struct PythonStats {
 // relative to the directory (or to the file's directory). `threads` = 0 uses every core.
 Graph extract_python(const std::filesystem::path& path, PythonStats* stats = nullptr,
                      unsigned threads = 0);
+
+// The same, for a given list of .py files relative to `root` (as optum::discover returns).
+Graph extract_python_files(const std::filesystem::path& root,
+                           const std::vector<std::filesystem::path>& files,
+                           PythonStats* stats = nullptr, unsigned threads = 0);
 
 }  // namespace optum

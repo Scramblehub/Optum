@@ -118,4 +118,20 @@ SqlTables sql_tables(std::string_view sql) {
   return out;
 }
 
+std::string sql_store_id(std::string_view table) {
+  for (std::string_view schema : {"public.", "dbo.", "main."}) {
+    if (table.size() > schema.size()) {
+      bool same = true;
+      for (std::size_t i = 0; i < schema.size() && same; ++i) {
+        same = std::tolower(static_cast<unsigned char>(table[i])) == schema[i];
+      }
+      if (same) {
+        table.remove_prefix(schema.size());
+        break;
+      }
+    }
+  }
+  return "sql:" + std::string(table);
+}
+
 }  // namespace optum

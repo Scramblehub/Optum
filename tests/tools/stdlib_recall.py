@@ -72,4 +72,5 @@ for a, b in missing:
 print("missing by kind:", cats.most_common(8))
 import random; random.seed(3)
 print("sample of missing 'other':")
-for e in random.sample(sorted(m for m in missing if m[1] in nodes and not m[1].rsplit('.',1)[-1].startswith('__')), 15): print("  ", e[0], "->", e[1])
+pool = sorted(m for m in missing if m[1] in nodes and not m[1].rsplit('.', 1)[-1].startswith('__'))
+for e in random.sample(pool, min(15, len(pool))): print("  ", e[0], "->", e[1])

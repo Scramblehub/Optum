@@ -18,4 +18,8 @@ struct SqlTables {
 // ("public.orders") and lose quotes. Each table appears at most once per list.
 SqlTables sql_tables(std::string_view sql);
 
+// The store node id for a table: "sql:" + the table, without a default schema ("public.",
+// "dbo.", "main."), so every frontend names the same table the same way.
+std::string sql_store_id(std::string_view table);
+
 }  // namespace optum
