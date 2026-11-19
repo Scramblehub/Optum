@@ -42,3 +42,11 @@
 	path = External_Libraries/capstone
 	url = https://github.com/capstone-engine/capstone.git
 	shallow = true
+[submodule "External_Libraries/corpus/lz4"]
+	path = External_Libraries/corpus/lz4
+	url = https://github.com/lz4/lz4.git
+	shallow = true
+[submodule "External_Libraries/corpus/parson"]
+	path = External_Libraries/corpus/parson
+	url = https://github.com/kgabis/parson.git
+	shallow = true

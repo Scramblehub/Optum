@@ -23,9 +23,13 @@ gcc, `-g -fPIC`.
 | glue | `tests/fixtures/programs/c/http_glue` + [stubs](stubs) | `http_glue`, linked against stub `libcurl.so.4` and `libsqlite3.so.0` |
 | zlib v1.3.1 | submodule `External_Libraries/corpus/zlib` | `libz.so`, `minigzip`, `example` |
 | cJSON v1.7.18 | submodule `External_Libraries/corpus/cJSON` | `libcjson.so`, `cjson_test` |
+| lz4 v1.11.1 (**sealed**) | submodule `External_Libraries/corpus/lz4` | `liblz4.so`, `lz4_frame`, `lz4_file` |
+| parson `ec53fb6` (**sealed**) | submodule `External_Libraries/corpus/parson` | `libparson.so`, `parson_tests` |
 | sqlite 3.54.1 (optional) | downloaded, SHA3-256 pinned | `libsqlite3.so` |
 
-That's 50 binaries without sqlite (15 of them the glue project's, stubs included).
+That's 75 binaries without sqlite. **Sealed** projects are held-out test data for identification
+research: they've been used once, as a test, by [round 3](../../docs/notes/2026-11-18-bin-skeletons-r3.md).
+Don't tune anything on them; add new sealed projects for new studies.
 
 **Stubs** ([stubs/](stubs)): stand-in headers and shared libraries for libcurl and sqlite, so glue
 code builds the same everywhere without their development files. The headers use the real ABI

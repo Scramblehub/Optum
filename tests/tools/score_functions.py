@@ -63,6 +63,8 @@ def graph_starts(path):
         addr = n.get("loc", {}).get("address")
         if n["kind"] == "function" and addr:
             starts.add(int(addr, 16))
+        if n["kind"] == "function":
+            starts.update(int(c, 16) for c in n.get("attrs", {}).get("copies", []))
     return starts
 
 

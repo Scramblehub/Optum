@@ -66,7 +66,10 @@ def main():
             g = json.load(open(out))
             addr_of = {n["id"]: int(n["loc"]["address"], 16) for n in g["nodes"]
                        if n["kind"] == "function" and n.get("loc", {}).get("address")}
-            found = set(addr_of.values())
+            # A node can stand for several copies of one source function (attrs.copies).
+            copies = {int(c, 16): n["id"] for n in g["nodes"] if n["kind"] == "function"
+                      for c in n.get("attrs", {}).get("copies", [])}
+            found = set(addr_of.values()) | set(copies)
             truth_addr = {int(f["address"], 16): f for f in t["functions"]}
             c = per_opt[e["opt"]]
             c["f_truth"] += len(truth_addr)
@@ -88,6 +91,7 @@ def main():
             if form == "debug":
                 ids_at = {int(n["loc"]["address"], 16): n["id"] for n in g["nodes"]
                           if n["kind"] == "function" and n.get("loc", {}).get("address")}
+                ids_at.update(copies)
                 # Per address: identical-code folding can give one body several source names
                 # (sqlite3SelectDelete and sqlite3SelectDeleteGeneric); any of them is right.
                 acceptable = collections.defaultdict(set)

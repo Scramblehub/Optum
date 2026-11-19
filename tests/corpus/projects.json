@@ -1,5 +1,5 @@
 {
-  "about": "The binary reference corpus (docs/plans/binary.md, stage 2). Each project is built at every optimisation level, in three forms, with an answer key. Paths are relative to the repo root. Build: python3 tests/tools/build_corpus.py --out <dir>. '@repo/' in sources and flags means the repo root; '@bin:NAME' in libs links against a binary built earlier in the same project (stub libraries, tests/corpus/stubs).",
+  "about": "The binary reference corpus (docs/plans/binary.md, stage 2). Each project is built at every optimisation level, in three forms, with an answer key. Paths are relative to the repo root. Build: python3 tests/tools/build_corpus.py --out <dir>. '@repo/' in sources and flags means the repo root; '@bin:NAME' in libs links against a binary built earlier in the same project (stub libraries, tests/corpus/stubs). Projects marked 'sealed' are held-out test data for identification research (docs/notes/2026-11-18-bin-skeletons.md): don't tune anything on them.",
   "opt_levels": [
     "-O0",
     "-O1",
@@ -147,6 +147,78 @@
           "sources": [
             "cJSON.c",
             "test.c"
+          ],
+          "libs": [
+            "-lm"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "lz4",
+      "root": "External_Libraries/corpus/lz4",
+      "sealed": true,
+      "cflags": [
+        "-Ilib"
+      ],
+      "library": [
+        "lib/lz4.c",
+        "lib/lz4hc.c",
+        "lib/lz4frame.c",
+        "lib/xxhash.c",
+        "lib/lz4file.c"
+      ],
+      "binaries": [
+        {
+          "name": "liblz4.so",
+          "kind": "shared",
+          "sources": [
+            "@library"
+          ]
+        },
+        {
+          "name": "lz4_frame",
+          "kind": "exe",
+          "sources": [
+            "@library",
+            "examples/frameCompress.c"
+          ]
+        },
+        {
+          "name": "lz4_file",
+          "kind": "exe",
+          "sources": [
+            "@library",
+            "examples/fileCompress.c"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "parson",
+      "root": "External_Libraries/corpus/parson",
+      "sealed": true,
+      "cflags": [
+        "-I.",
+        "-DTESTS_MAIN"
+      ],
+      "binaries": [
+        {
+          "name": "libparson.so",
+          "kind": "shared",
+          "sources": [
+            "parson.c"
+          ],
+          "libs": [
+            "-lm"
+          ]
+        },
+        {
+          "name": "parson_tests",
+          "kind": "exe",
+          "sources": [
+            "parson.c",
+            "tests.c"
           ],
           "libs": [
             "-lm"
