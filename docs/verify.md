@@ -56,4 +56,7 @@ Known limit: in Python, `init = super().__init__; init(...)` is recorded as a ca
 |---|---|---|---|
 | Python samples | | 100% | except `dynamic`: 50%, the 5 hard edges by design |
 | Python 3.12 standard library (`tests/tools/stdlib_workload.py`) | 537 | **70.6%** | counting indirect calls; the earlier 93.5% (260 calls) left them out |
-| npm (11 offline commands) | 104 | **98.1%** | v0.1 was 79.0%; see the [JS note](notes/2026-11-18-js-frontend-eval.md) |
+| npm (11 offline commands) | 105 | 79.0% | most misses: commands loaded by computed name |
+
+npm, since computed requires, return values and callbacks are followed: **98.1%** of 104 observed
+calls (the [JS note](notes/2026-11-18-js-frontend-eval.md)).
