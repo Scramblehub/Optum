@@ -1,0 +1,14 @@
+{
+  "name": "Odd",
+  "nodes": [
+    1,
+    "text",
+    {"name": "Fetch", "type": "n8n-nodes-base.httpRequest", "parameters": []},
+    {"name": "Other", "type": "n8n-nodes-base.slack", "parameters": null},
+    {"name": "Third", "type": "n8n-nodes-base.postgres", "parameters": {"table": ["x"]}}
+  ],
+  "connections": {
+    "Fetch": {"main": [[{"node": "Other"}], null, "junk"]},
+    "Other": ["not", "a", "dict"]
+  }
+}

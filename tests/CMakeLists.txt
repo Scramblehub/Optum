@@ -181,10 +181,19 @@ if(Python3_FOUND)
            COMMAND optum frontends ${FIXTURES}/programs/mixed --adapter "${N8N}")
   set_tests_properties(cli_frontends_lists_adapter PROPERTIES PASS_REGULAR_EXPRESSION "n8n 0.1.0  \\*.json  \\(2 files\\)")
 
+  # A file shaped like a workflow but with odd entries must be read, not crash the adapter.
+  add_test(NAME adapter_n8n_odd_workflow
+           COMMAND optum graph ${FIXTURES}/adapters --adapter "${N8N}")
+  set_tests_properties(adapter_n8n_odd_workflow PROPERTIES
+                       PASS_REGULAR_EXPRESSION "n8n:odd_workflow/Fetch"
+                       FAIL_REGULAR_EXPRESSION "Traceback|exited with status")
+
   # Misbehaving adapters: each must fail with a clear message naming the adapter.
   set(FAKE "${Python3_EXECUTABLE} ${FIXTURES}/adapters/fake_adapter.py")
   set(ADAPTER_DIR ${FIXTURES}/adapters)
   foreach(case "ok|fake adapter ran"
+               "patch_protocol|fake adapter ran"
+               "newer_minor|speaks protocol 'optum-frontend/0.2'"
                "bad_protocol|speaks protocol 'optum-frontend/9.0'"
                "crash|exited with status 3; last output:.something broke"
                "not_json|stdout is not JSON"

@@ -37,6 +37,11 @@ SQL_READ_OPS = {"select", "get", "getAll"}
 READ_OPS = {"get", "getAll", "getMany", "search", "list", "read", "lookup"}
 
 
+def major_minor(version):
+    """'optum-frontend/0.1.3' -> 'optum-frontend/0.1': requests may differ in patch only."""
+    return ".".join(version.split(".")[:2])
+
+
 def describe():
     return {"protocol": PROTOCOL, "name": NAME, "version": "0.1.0", "file_patterns": ["*.json"],
             "languages": ["n8n"]}
@@ -116,6 +121,8 @@ def add_workflow(b, doc, rel, warn):
            attrs={"active": bool(doc.get("active", False))})
     steps = {}
     for n in doc["nodes"]:
+        if not isinstance(n, dict):
+            continue  # not an n8n node: skip rather than fail the whole run
         name = n.get("name")
         if not isinstance(name, str) or not name:
             continue
@@ -130,14 +137,15 @@ def add_workflow(b, doc, rel, warn):
             attrs["disabled"] = True
         b.node(step, "step", name, loc={"file": rel}, attrs=attrs)
         b.edge(prog, step, "defines")
-        add_step_effects(b, step, short, n.get("parameters") or {}, rel, warn)
+        params = n.get("parameters")
+        add_step_effects(b, step, short, params if isinstance(params, dict) else {}, rel, warn)
 
     for src, outputs in doc["connections"].items():
         if src not in steps or not isinstance(outputs, dict):
             continue
         for branches in outputs.values():
-            for branch in branches or []:
-                for target in branch or []:
+            for branch in branches if isinstance(branches, list) else []:
+                for target in branch if isinstance(branch, list) else []:
                     dst = target.get("node") if isinstance(target, dict) else None
                     if dst in steps:
                         b.edge(steps[src], steps[dst], "triggers")
@@ -202,7 +210,7 @@ def main(argv):
         out = describe()
     else:
         request = json.load(sys.stdin)
-        if str(request.get("protocol", "")).rsplit(".", 1)[0] != PROTOCOL.rsplit(".", 1)[0]:
+        if major_minor(str(request.get("protocol", ""))) != major_minor(PROTOCOL):
             print(f"unsupported protocol {request.get('protocol')!r}", file=sys.stderr)
             return 3
         out = extract(request)
