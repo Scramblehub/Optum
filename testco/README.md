@@ -11,7 +11,16 @@ python3 testco/generate.py                           # data for every tool, and 
 docker compose -f testco/compose.yaml down           # stop (add -v to delete the data too)
 ```
 
-Everything listens on `127.0.0.1` only.
+Everything listens on `127.0.0.1` only, and only through **`observe`**, the recording proxy
+(mitmproxy in reverse mode): the tools publish no ports of their own, so every exchange with them
+is recorded in `recordings/<tool>.jsonl` with secrets redacted (credential headers, fields named
+like secrets, Odoo's positional password). That's what each tool's behaviour is learned from
+(the [plan](../docs/plans/phase3.md): "Learning a tool we can't read"). Browser sessions saved as
+HAR join them in the same format:
+
+```sh
+python3 testco/observe/har_import.py session.har --tool 127.0.0.1:8069=accounting -o testco/recordings/
+```
 
 ## Services so far
 
