@@ -62,8 +62,7 @@ Same 11 npm commands, profiled again (104 observed calls):
 |---|---|
 | main (v0.1) | 78.8% (82 of 104) |
 | Tracer: a class without a constructor runs an implicit one, a frame at the class line. It now counts as the class (`new Sub()`), and its implicit `super(...)` is left out. Before, it showed up as the *module* calling the base class: 9 false misses become what they are, misses of npm's dispatch | 78.8% |
-| Return values (`static cmd(c) { return require(...) }`) and computed requires (`require(\`./commands/${command}.js\`)` → every matching file) | 96.2% |
-| Callbacks given to `sort`, `map`, `filter`... | **98.1%** (102 of 104) |
+| Return values (`static cmd(c) { return require(...) }`), computed requires (`require(\`./commands/${command}.js\`)` → every matching file), and callbacks given to `sort`, `map`, `filter`... (measured together) | **98.1%** (102 of 104) |
 
 - **Precision:** the new edges are all `inferred`. The 145 `computed_require` edges come from two
   lines in `Npm.#exec`: `new Command(this)` reaches the 67 command classes, and `command.exec(args)`
