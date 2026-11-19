@@ -1,7 +1,8 @@
 #pragma once
 // The C frontend: reads .c and .h files with tree-sitter and produces a graph following the C
 // rules in docs/frontends.md. No preprocessing: macros aren't expanded, but string macros are
-// read for URLs and SQL.
+// read for URLs and SQL, calls in function-like macros are followed, and #ifs are evaluated for
+// one build configuration (compile_commands.json's flags if `root` has one, else no -D flags).
 
 #include <cstddef>
 #include <filesystem>

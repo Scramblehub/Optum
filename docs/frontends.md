@@ -116,8 +116,9 @@ nearest named function, or the module.
 
 ## C
 
-Files: `.c` and `.h`. There's no preprocessor run, so macros aren't expanded in general. Two
-narrow exceptions follow (string macros, and function calls inside function-like macros).
+Files: `.c` and `.h`. There's no preprocessor run, so macros aren't expanded in general. The
+exceptions: string macros, function calls inside function-like macros, `#define a b` renaming a
+function, and `#if`s, which are evaluated for one build configuration (below).
 
 | Thing | Node | Id example |
 |---|---|---|
@@ -133,12 +134,45 @@ a header is a node of the header.
 | File defines function | `defines` |
 | `#include "x.h"` / `<x.h>` | `imports`: next to the including file, from the root, or a unique project file ending in it. C and POSIX system headers give no edge; others become `third_party` modules |
 | `f()` | `calls`, resolved like the linker: the same file, then headers it includes (also through other headers), then a unique non-`static` definition. That last case is `exact` only if the caller sees a prototype for `f`; otherwise `inferred`, `attrs.via: "name_only"`, since it may belong to another program in the repo |
-| `MACRO(...)` naming a function-like macro of the project | `calls` to the project functions its body calls, followed through nested macros; `attrs.via: "macro"` |
+| `MACRO(...)` naming a function-like macro of the project | `calls` to the project functions its body calls, followed through nested macros; `attrs.via: "macro"`. Every `#define` of the macro counts (`#ifdef X / #define M ... / #else / #define M ...`), each with its own `#if` |
+| `f()` where `#define f g` is in force | `calls` to `g`. The edge to a function `f`, if there is one, is `inferred`, `attrs.inactive`, `attrs.condition: "!defined(f)"` |
 | A call through a function pointer (`fp(x)`, `ops->run(x)`, a parameter) | `calls` to every function whose address is taken somewhere (named outside a call) **with the same number of parameters**; at most 12, else none. `inferred`, `attrs.via: "function_pointer"` (hard) |
 | A call inside `#if` / `#ifdef` / `#else` | as above, with `attrs.condition` (e.g. `"ZLIB_DEBUG"`, `"not (HAVE_MEMCPY)"`): it happens in some build configurations |
+| A call that isn't compiled in the build configuration: inside an `#if` that's off, through a macro `#define`d in one, or to a function defined in one (and nowhere else) | `inferred`, `attrs.inactive: true`, `attrs.condition` naming the `#if`s that are off. When the function is compiled out, a function-like macro of the same name is followed instead (`#ifdef ZLIB_DEBUG / void send_bits(...) / #else / #define send_bits(...)`) |
 | libc and other libraries' functions | none |
 | `curl_easy_setopt(h, CURLOPT_URL, url)` | `reads` / `sends_to` an `http:` node. The method comes from the function's other options (`CURLOPT_POST`/`POSTFIELDS` → POST, `CUSTOMREQUEST "PATCH"`, `UPLOAD` → PUT, `NOBODY` → HEAD; default GET). URLs from literals, `#define` strings, string constants, `"lit" MACRO` concatenation and `snprintf`/`sprintf` into a local buffer (conversions become `{}`) |
 | `sqlite3_exec` / `sqlite3_prepare*`, `PQexec` / `PQexecParams` / `PQprepare`, `mysql_query` with SQL text | `reads` / `writes` `sql:<table>` nodes |
+
+When several call sites link the same two functions, the edge comes from the most certain one:
+`exact` before `inferred`, compiled before not, outside any `#if` before inside.
+
+An `#if` around `else if (...) { ... }` in a function parses as a function named `if`; its calls
+are kept as the enclosing function's.
+
+### The build configuration
+
+`#if` structure is read line by line from the directives, not from the syntax tree (tree-sitter's
+error recovery on macro-heavy code can stretch an `#ifdef __cplusplus` over the rest of a header).
+Each `#if` is then evaluated per translation unit (a `.c` file and the headers it includes) with
+three-valued logic: on, off or unknown. Unknown counts as on, so an edge is only demoted when the
+`#if` is known to be off.
+
+- `compile_commands.json` at the root or in `build/`, if there is one: the `-D` / `-U` flags each
+  file is compiled with come first.
+- A name the project `#define`s is defined when one of the `#define`s the translation unit can
+  see is in a branch that's on. While that's decided the name counts as not yet defined, so
+  include guards and `#ifndef X / #define X default` hold.
+- A name nobody `#define`s and the code never uses as a value is a build option that's off
+  (`ZLIB_DEBUG`, `NO_GZIP`): the default is a build with no `-D` flags. One the code uses
+  (`O_CLOEXEC`) comes from a system header: unknown. One `#define`d only in a header this file
+  doesn't see: unknown.
+- The compiler and platform are GCC or Clang on Linux: `__STDC__`, `__STDC_VERSION__` (C17),
+  `__GNUC__`, `__linux__`, `__unix__` are defined; other platforms' and compilers' names (`_WIN32`,
+  `_MSC_VER`, `__APPLE__`, `__MSDOS__`...) aren't; other reserved names (`__x86_64__`,
+  `__aarch64__`...) are unknown. Constants of `limits.h`, `stdint.h`, `stdio.h` and `stdlib.h`
+  (`INT_MAX`, `SIZE_MAX`...) are defined, value unknown, where the header is included.
+- Arithmetic, comparisons, `defined`, `&&`, `||`, `?:` are evaluated; a function-like macro in an
+  `#if` is unknown. An `#undef` of a name makes it unknown.
 
 Binaries (`docs/plans/binary.md`) map functions with debug info to these same `c:` ids, so a
 binary's graph can be scored against, and merged with, its source graph.

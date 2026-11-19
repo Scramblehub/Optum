@@ -9,6 +9,7 @@ add_executable(optum_tests
   test_view_export.cpp
   test_process.cpp
   test_frontend_robustness.cpp
+  test_c_frontend.cpp
   test_elf.cpp
   test_dwarf.cpp
 )
