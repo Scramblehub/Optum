@@ -34,7 +34,12 @@ A copy is merged only if all of these hold. Otherwise it is listed as refused, w
    must be a builtin in both modules, the same import, or the same constant. A name defined in
    each module is refused even when the definitions look alike.
 3. **No import cycle:** the kept function's module doesn't import the copy's module.
-4. **The tests agree** (with `--test`): they must pass before the change, and after it; if they
+4. **Not regulated code.** Tax, legal and medical code is often duplicated on purpose: this
+   year's VAT rules next to last year's, each kept as it was filed. Copies whose module path or
+   name has a word like `tax`, `vat`, `w9`, `1099`, `legal`, `contract`, `consent`, `medical`,
+   `patient`, `hipaa` are refused, unless `--allow-regulated` (the same words as the same-entity
+   analysis, [diagnose.md](diagnose.md#the-same-data-in-several-places)).
+5. **The tests agree** (with `--test`): they must pass before the change, and after it; if they
    fail after, every file is restored.
 
 Without `--apply`, it only prints the diff.
@@ -49,14 +54,15 @@ The copy's name now refers to the kept function, so `old_invoice_total.__name__`
 ### How it's checked
 
 The sample project [tests/fixtures/fixes/merge_duplicates](../tests/fixtures/fixes/merge_duplicates)
-has 5 exact copy pairs and a unittest suite. 2 are safe to merge (one across modules, one in the same
-file); 3 are traps: the same code reading a `RATE` that's 0.20 in one module and 0.25 in the other,
-a copy whose kept module imports it (a cycle), and a copy calling a `helper` defined in each module.
+has 6 exact copy pairs and a unittest suite. 2 are safe to merge (one across modules, one in the same
+file); 4 are traps: the same code reading a `RATE` that's 0.20 in one module and 0.25 in the other,
+a copy whose kept module imports it (a cycle), a copy calling a `helper` defined in each module,
+and `vat_due` in `shop/tax/rules_2023.py` and `rules_2024.py` (regulated: each year stays as filed).
 [check_fix.py](../tests/tools/check_fix.py) runs three ways in a fresh copy:
 
 | Test | Checks |
 |---|---|
-| `apply` | 2 merged, 3 refused with the right reasons; the tests pass before, after, and again afterwards |
+| `apply` | 2 merged, 4 refused with the right reasons; the tests pass before, after, and again afterwards |
 | `dry` | the diff is printed and no file changes |
 | `revert` | a test the merge breaks (`__name__`) fails after the change, and every file is restored |
 

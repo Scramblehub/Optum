@@ -20,8 +20,8 @@ def old_invoice_total(lines, discount_code):
     return round(subtotal, 2)
 
 
-def old_with_tax(amount):
-    """REFUSE: the same code as shop.pricing.with_tax, but RATE means 0.25 here."""
+def old_with_surcharge(amount):
+    """REFUSE: the same code as shop.pricing.with_surcharge, but RATE means 0.25 here."""
     taxed = amount * (1 + RATE)
     if taxed < 0:
         raise ValueError("negative amount: " + str(amount))

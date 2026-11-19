@@ -15,7 +15,10 @@ A copy is merged only when it is safe (docs/fixes.md):
   2. every global name the body uses means the same in both modules: a builtin in both, the same
      import, or the same constant; anything else (a different TAX_RATE, a local helper) refuses;
   3. no import cycle: the kept function's module doesn't import the copy's module;
-  4. with --test, the project's tests pass before; after the change they must pass again, or every
+  4. not regulated code: tax, legal or medical modules and functions (rules_2023.vat_due and
+     rules_2024.vat_due are separate on purpose; each year's rules stay as filed), unless
+     --allow-regulated;
+  5. with --test, the project's tests pass before; after the change they must pass again, or every
      file is restored.
 
 Without --apply it prints the diff and changes nothing.
@@ -32,6 +35,29 @@ import sys
 import tempfile
 
 BUILTINS = set(dir(__builtins__)) if not isinstance(__builtins__, dict) else set(__builtins__)
+
+# Regulated code (tax, legal, medical) stays as it is: the same words as the same-entity analysis
+# (docs/diagnose.md, "The same data in several places").
+REGULATED = {
+    "tax": "tax", "taxes": "tax", "vat": "tax", "gst": "tax", "hst": "tax", "w2": "tax", "w4": "tax", "w8": "tax",
+    "w9": "tax", "1099": "tax", "1040": "tax", "irs": "tax", "hmrc": "tax",
+    "legal": "legal", "contract": "legal", "contracts": "legal", "agreement": "legal", "consent": "legal",
+    "waiver": "legal", "nda": "legal", "affidavit": "legal", "litigation": "legal", "gdpr": "legal", "kyc": "legal",
+    "aml": "legal",
+    "medical": "medical", "patient": "medical", "patients": "medical", "diagnosis": "medical",
+    "prescription": "medical", "clinical": "medical", "hipaa": "medical", "phi": "medical", "ehr": "medical",
+    "emr": "medical", "healthcare": "medical", "icd10": "medical",
+}
+
+
+def regulated(node_id):
+    """'tax', 'legal' or 'medical' if a word of the id (module path, function name) says so."""
+    import re
+    text = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", node_id[3:])
+    for w in re.split(r"[^A-Za-z0-9]+", text.lower()):
+        if w in REGULATED:
+            return REGULATED[w]
+    return None
 
 
 def module_file(root, mod):
@@ -170,6 +196,8 @@ def main():
     ap.add_argument("--test", help="the project's test command, run in DIR before and after")
     ap.add_argument("--apply", action="store_true", help="change the files (default: print the diff)")
     ap.add_argument("--report", help="write what was merged and refused, as JSON")
+    ap.add_argument("--allow-regulated", action="store_true",
+                    help="also merge copies in tax, legal or medical code (they're refused by default)")
     args = ap.parse_args()
     root = os.path.abspath(args.dir)
 
@@ -222,6 +250,10 @@ def main():
 
             if cfn is None or cfn.decorator_list:
                 refuse("not a plain top-level function")
+                continue
+            kind = regulated(copy) or regulated(keep)
+            if kind and not args.allow_regulated:
+                refuse(f"regulated ({kind}) code stays as it is (--allow-regulated to merge)")
                 continue
             if body_dump(cfn) != body_dump(kfn):
                 refuse("not the same syntax tree")

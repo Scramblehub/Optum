@@ -16,8 +16,8 @@ class ShopTest(unittest.TestCase):
         self.assertEqual(pricing.shipping_cost_v2(2.0, False), 5.75)
 
     def test_tax_differs(self):
-        self.assertEqual(pricing.with_tax(100), 120.0)
-        self.assertEqual(totals.old_with_tax(100), 125.0)
+        self.assertEqual(pricing.with_surcharge(100), 120.0)
+        self.assertEqual(totals.old_with_surcharge(100), 125.0)
 
     def test_labels(self):
         self.assertEqual(labels.label(1, "ann"), totals.old_label(1, "ann"))

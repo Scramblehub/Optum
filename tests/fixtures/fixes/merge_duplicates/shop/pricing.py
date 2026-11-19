@@ -31,8 +31,8 @@ def shipping_cost(weight_kg, express):
     return cost
 
 
-def with_tax(amount):
-    """Add tax at this module's RATE."""
+def with_surcharge(amount):
+    """Add a surcharge at this module's RATE."""
     taxed = amount * (1 + RATE)
     if taxed < 0:
         raise ValueError("negative amount: " + str(amount))

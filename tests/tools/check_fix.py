@@ -3,7 +3,8 @@
 
     check_fix.py apply|dry|revert --optum OPTUM --sample DIR --work DIR
 
-apply   merges 2 copies, refuses 3, tests pass before and after, and pass again afterwards
+apply   merges 2 copies, refuses 4 (one is regulated tax code), tests pass before and after, and
+        pass again afterwards
 dry     prints the diff and changes nothing
 revert  a test the merge breaks (a merged copy takes the kept function's __name__) fails after
         the change, so every file is restored
@@ -46,7 +47,11 @@ def main():
         r = run(cmd + ["--test", TESTS, "--apply"])
         assert r.returncode == 0, r.stderr
         rep = json.load(open(report))
-        assert rep["applied"] and len(rep["merged"]) == 2 and len(rep["refused"]) == 3, rep
+        assert rep["applied"] and len(rep["merged"]) == 2 and len(rep["refused"]) == 4, rep
+        whys = sorted(r["why"].split(":")[0].split(" (")[0] for r in rep["refused"])
+        assert sum(w.startswith("regulated") for w in whys) == 1, whys
+        assert sum(w.startswith("globals mean") for w in whys) == 2, whys
+        assert sum(w.startswith("import cycle") for w in whys) == 1, whys
         assert rep["tests"] == {"before": True, "after": True}, rep
         t = run(TESTS, shell=True, cwd=a.work)
         assert t.returncode == 0, t.stderr
