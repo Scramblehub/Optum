@@ -1,8 +1,10 @@
 #include <CLI/CLI.hpp>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 
+#include "optum/frontends/python.hpp"
 #include "optum/ir.hpp"
 #include "optum/score.hpp"
 #include "optum/version.hpp"
@@ -38,6 +40,10 @@ int main(int argc, char** argv) {
   graph->add_option("path", path, "File or directory to read")->required();
   graph->add_option("-o,--out", out_path, "Output file (default: stdout)");
   graph->add_option("--indent", indent, "JSON indent; -1 for compact")->capture_default_str();
+  unsigned threads = 0;
+  bool quiet = false;
+  graph->add_option("-j,--threads", threads, "Worker threads; 0 = all cores")->capture_default_str();
+  graph->add_flag("-q,--quiet", quiet, "Don't print statistics to stderr");
 
   std::vector<std::string> check_files;
   auto* check = app.add_subcommand("check", "Validate graph JSON files against the IR format");
@@ -67,9 +73,19 @@ int main(int argc, char** argv) {
         std::cerr << "optum: no such file or directory: " << path << "\n";
         return 2;
       }
-      // No frontends yet: an empty graph, so the pipeline exists end to end.
-      optum::Graph g;
-      g.source = path;
+      const auto start = std::chrono::steady_clock::now();
+      optum::PythonStats stats;
+      const optum::Graph g = optum::extract_python(path, &stats, threads);
+      const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::steady_clock::now() - start).count();
+      if (!quiet) {
+        std::cerr << "python: " << stats.files << " files, " << stats.lines << " lines";
+        if (stats.files_with_syntax_errors) {
+          std::cerr << " (" << stats.files_with_syntax_errors << " with syntax errors)";
+        }
+        std::cerr << " -> " << g.nodes().size() << " nodes, " << g.edges().size() << " edges in "
+                  << ms << " ms\n";
+      }
       return write_json(optum::to_json(g), out_path, indent);
     }
     if (*check) {

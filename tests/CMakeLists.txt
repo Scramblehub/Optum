@@ -3,6 +3,7 @@ add_executable(optum_tests
   test_ir.cpp
   test_ir_json.cpp
   test_score.cpp
+  test_sql_http.cpp
 )
 target_link_libraries(optum_tests PRIVATE optum_core Catch2::Catch2WithMain)
 
@@ -19,7 +20,7 @@ add_test(NAME cli_version COMMAND optum --version)
 set_tests_properties(cli_version PROPERTIES PASS_REGULAR_EXPRESSION "^0\\.0\\.1")
 add_test(NAME cli_graph_missing_path COMMAND optum graph /no/such/path)
 set_tests_properties(cli_graph_missing_path PROPERTIES WILL_FAIL TRUE)
-add_test(NAME cli_graph_emits_json COMMAND optum graph ${CMAKE_SOURCE_DIR}/README.md)
+add_test(NAME cli_graph_emits_json COMMAND optum graph -q ${CMAKE_SOURCE_DIR}/README.md)
 set_tests_properties(cli_graph_emits_json PROPERTIES PASS_REGULAR_EXPRESSION "\"ir_version\": \"0\\.1\\.0\"")
 add_test(NAME cli_check_valid COMMAND optum check ${IR_VALID})
 add_test(NAME cli_merge COMMAND optum merge ${IR_VALID} --indent -1)
@@ -43,6 +44,24 @@ foreach(f ${PROGRAM_EXPECTED})
   add_test(NAME fixture_${name}_self_score
            COMMAND optum score ${f} ${f} --min-precision 1 --min-recall 1)
 endforeach()
+# The Python frontend against each sample program. These minimums only go up: a change that
+# makes a sample worse fails here. `dynamic` misses its 5 hard edges by design (16/21).
+set(PY_MIN_RECALL_dynamic 0.76)
+file(GLOB PY_PROGRAMS LIST_DIRECTORIES true ${FIXTURES}/programs/python/*)
+foreach(dir ${PY_PROGRAMS})
+  if(NOT IS_DIRECTORY ${dir})
+    continue()
+  endif()
+  get_filename_component(name ${dir} NAME)
+  set(min_recall 1)
+  if(DEFINED PY_MIN_RECALL_${name})
+    set(min_recall ${PY_MIN_RECALL_${name}})
+  endif()
+  set(out ${CMAKE_CURRENT_BINARY_DIR}/produced_python_${name}.json)
+  add_test(NAME frontend_python_${name}
+           COMMAND sh -c "$<TARGET_FILE:optum> graph ${dir} -q -o ${out} && $<TARGET_FILE:optum> score ${dir}/expected.json ${out} --min-precision 1 --min-recall ${min_recall}")
+endforeach()
+
 add_test(NAME cli_score_detects_gaps
          COMMAND optum score ${FIXTURES}/programs/python/classes/expected.json
                  ${FIXTURES}/ir/valid/order_sync.json --min-recall 0.5)

@@ -14,7 +14,10 @@
     {"id": "py:shapes.Circle.__init__", "kind": "function", "name": "__init__", "frontend": "python"},
     {"id": "py:shapes.Circle.area", "kind": "function", "name": "area", "frontend": "python"},
     {"id": "py:shapes.make_all", "kind": "function", "name": "make_all", "frontend": "python"},
-    {"id": "py:shapes.describe_square", "kind": "function", "name": "describe_square", "frontend": "python"}
+    {"id": "py:shapes.describe_square", "kind": "function", "name": "describe_square", "frontend": "python"},
+    {"id": "py:shapes.Canvas", "kind": "data_type", "name": "Canvas", "frontend": "python"},
+    {"id": "py:shapes.Canvas.__init__", "kind": "function", "name": "__init__", "frontend": "python"},
+    {"id": "py:shapes.Canvas.main_area", "kind": "function", "name": "main_area", "frontend": "python"}
   ],
   "edges": [
     {"from": "py:shapes", "to": "py:shapes.Shape", "kind": "defines"},
@@ -40,6 +43,13 @@
     {"from": "py:shapes.describe_square", "to": "py:shapes.Shape.describe", "kind": "calls"},
     {"from": "py:shapes", "to": "py:shapes.make_all", "kind": "calls"},
     {"from": "py:shapes", "to": "py:shapes.describe_square", "kind": "calls"},
-    {"from": "py:shapes", "to": "py:shapes.Shape.describe", "kind": "calls", "attrs": {"difficulty": "hard"}}
+    {"from": "py:shapes", "to": "py:shapes.Shape.describe", "kind": "calls", "attrs": {"difficulty": "hard"}},
+    {"from": "py:shapes", "to": "py:shapes.Canvas", "kind": "defines"},
+    {"from": "py:shapes.Canvas", "to": "py:shapes.Canvas.__init__", "kind": "defines"},
+    {"from": "py:shapes.Canvas", "to": "py:shapes.Canvas.main_area", "kind": "defines"},
+    {"from": "py:shapes.Canvas.__init__", "to": "py:shapes.Square", "kind": "calls"},
+    {"from": "py:shapes.Canvas.main_area", "to": "py:shapes.Square.area", "kind": "calls"},
+    {"from": "py:shapes", "to": "py:shapes.Canvas", "kind": "calls"},
+    {"from": "py:shapes", "to": "py:shapes.Canvas.main_area", "kind": "calls"}
   ]
 }

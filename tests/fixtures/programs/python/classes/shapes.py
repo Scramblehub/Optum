@@ -1,4 +1,4 @@
-"""Classes: constructors, super(), overriding, self-calls, a call on a typed local."""
+"""Classes: constructors, super(), overriding, self-calls, typed locals and attributes."""
 
 
 class Shape:
@@ -30,6 +30,14 @@ class Circle(Shape):
         return 3.14159 * self.r * self.r
 
 
+class Canvas:
+    def __init__(self):
+        self.main = Square(1)
+
+    def main_area(self):
+        return self.main.area()
+
+
 def make_all():
     return [Square(2), Circle(1)]
 
@@ -43,3 +51,4 @@ if __name__ == "__main__":
     for shape in make_all():
         print(shape.describe())
     print(describe_square())
+    print(Canvas().main_area())
