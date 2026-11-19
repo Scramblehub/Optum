@@ -19,6 +19,8 @@
 
 #include "../../ts_util.hpp"
 #include "../common.hpp"
+#include "../names.hpp"
+#include "../../test_code.hpp"
 #include "pp_expr.hpp"
 #include "optum/http.hpp"
 #include "optum/sql.hpp"
@@ -85,6 +87,8 @@ struct ModuleInfo {
   bool syntax_error = false;
   bool unreadable = false;
   std::vector<Func> funcs;
+  frontends::NameUses names;  // name uses outside definitions
+  bool test_file = false;
   std::vector<Include> includes;
   std::vector<CallSite> calls;
   std::unordered_map<std::string, Str> consts;  // file-scope string constants and string macros
@@ -1192,7 +1196,42 @@ Graph extract_c_files(const fs::path& root, const std::vector<fs::path>& rel_fil
     const TSNode rootn = ts_tree_root_node(tree.get());
     m.syntax_error = ts_node_has_error(rootn);
     Summarizer(m, src).run(rootn);
+    {  // test files count separately (attrs.referenced_by_tests)
+      static const std::unordered_set<std::string_view> names = {"identifier"}, strings = {"string_content"},
+                                                         text = {"preproc_arg"};
+      static const frontends::DefFields defs = {{"function_declarator", "declarator"}};
+      m.test_file = is_test_code(m.path);
+      frontends::count_name_uses(rootn, src, names, strings, defs, m.names, text);
+    }
   });
+  frontends::NameUses uses, test_uses;
+  {
+    // Included files the frontend doesn't parse (generated .inc tables, .def lists): their names
+    // count as uses, as text.
+    std::unordered_set<std::string> read;
+    for (const auto& m : project.mods) {
+      for (const Include& inc : m.includes) {
+        if (inc.system || inc.spec.ends_with(".h") || inc.spec.ends_with(".c")) continue;
+        for (const fs::path& cand : {root / fs::path(m.path).parent_path() / inc.spec, root / inc.spec}) {
+          const std::string key = cand.lexically_normal().string();
+          std::error_code ec;
+          if (!fs::is_regular_file(cand, ec)) continue;
+          if (read.insert(key).second) frontends::count_words(read_file(cand), m.test_file ? test_uses : uses);
+          break;
+        }
+      }
+    }
+  }
+  for (auto& m : project.mods) {
+    for (const auto& [name, n] : m.names) (m.test_file ? test_uses : uses)[name] += n;
+    m.names = {};
+  }
+  {
+    std::vector<std::string> names;
+    for (const auto& m : project.mods) for (const auto& f : m.funcs) names.push_back(f.name);
+    frontends::finalize_name_uses(uses, names);
+    frontends::finalize_name_uses(test_uses, std::move(names));
+  }
   auto flags = read_compile_flags(root);
   for (ModuleInfo& m : project.mods) {
     if (auto it = flags.find(m.path); it != flags.end()) m.flags = std::move(it->second);
@@ -1223,6 +1262,11 @@ Graph extract_c_files(const fs::path& root, const std::vector<fs::path>& rel_fil
       n.loc = SourceLoc{m.path, fn.line, fn.end_line, std::nullopt};
       n.frontend = "c";
       if (fn.is_static) n.attrs = {{"static", true}};
+      // Local (docs/frontends.md): static in a .c file. A static (inline) function in a header is
+      // there for every file that includes it, possibly outside the project.
+      if (fn.is_static && !m.path.ends_with(".h")) n.attrs["local"] = true;
+      if (frontends::name_used(uses, fn.name)) n.attrs["referenced"] = true;
+      else if (frontends::name_used(test_uses, fn.name)) n.attrs["referenced_by_tests"] = true;
       g.add_node(std::move(n));
     }
   }

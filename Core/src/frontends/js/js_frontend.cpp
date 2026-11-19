@@ -17,6 +17,8 @@
 
 #include "../../ts_util.hpp"
 #include "../common.hpp"
+#include "../names.hpp"
+#include "../../test_code.hpp"
 #include "optum/http.hpp"
 #include "optum/sql.hpp"
 
@@ -104,6 +106,8 @@ struct ModuleInfo {
   std::vector<CallSite> calls;
   std::unordered_map<std::string, Export> exports;
   std::vector<std::string> star_exports;
+  frontends::NameUses names;  // name uses outside definitions
+  bool test_file = false;
 };
 
 // ===================================================================== pass 1
@@ -730,9 +734,21 @@ class Project {
         if (v.kind == Value::Kind::Def && def(v.ref).kind == DefKind::Class && !(v.ref == DefRef{m, d})) {
           bases_[{m, d}] = v.ref;
           subclasses_[v.ref].push_back({m, d});
+        } else if (!(df.base->kind == Expr::Kind::Name && (df.base->text == "Object" || df.base->text == "Error"))) {
+          outside_base_.insert({m, d});  // a base outside the project may call methods by name
         }
       }
     }
+  }
+
+  bool has_outside_base(DefRef cls, int depth = 0) const {
+    for (; depth < 16; ++depth) {
+      if (outside_base_.count(cls)) return true;
+      const auto b = base_of(cls);
+      if (!b) return false;
+      cls = *b;
+    }
+    return false;
   }
 
   const Def& def(DefRef r) const { return mods[std::size_t(r.mod)].defs[std::size_t(r.def)]; }
@@ -1005,6 +1021,8 @@ class Project {
     if (auto b = base_of(cls)) return lookup_attr(*b, name, depth + 1);
     return {};
   }
+
+  std::unordered_set<DefRef, DefRefHash> outside_base_;
 
   std::optional<DefRef> base_of(DefRef cls) const {
     auto it = bases_.find(cls);
@@ -1374,12 +1392,37 @@ Graph extract_js_files(const fs::path& root, const std::vector<fs::path>& rel_fi
     const TSNode rootn = ts_tree_root_node(tree.get());
     m.syntax_error = ts_node_has_error(rootn);
     Summarizer(m, src).run(rootn);
+    {  // test files count separately (attrs.referenced_by_tests)
+      static const std::unordered_set<std::string_view> names = {
+          "identifier", "property_identifier", "shorthand_property_identifier", "private_property_identifier",
+          "shorthand_property_identifier_pattern", "type_identifier"};
+      static const std::unordered_set<std::string_view> strings = {"string_fragment"};
+      static const frontends::DefFields defs = {
+          {"function_declaration", "name"}, {"generator_function_declaration", "name"},
+          {"class_declaration", "name"},    {"abstract_class_declaration", "name"},
+          {"method_definition", "name"},    {"function_expression", "name"},
+          {"class", "name"},                {"variable_declarator", "name"}};
+      m.test_file = is_test_code(m.path);
+      frontends::count_name_uses(rootn, src, names, strings, defs, m.names);
+    }
   });
   project.index();
 
   std::vector<std::vector<EdgeOut>> edges(project.mods.size());
   parallel_for(project.mods.size(), threads,
                [&](std::size_t i) { edges[i] = Linker(project, static_cast<int>(i)).run(); });
+
+  frontends::NameUses uses, test_uses;
+  for (auto& m : project.mods) {
+    for (const auto& [name, n] : m.names) (m.test_file ? test_uses : uses)[name] += n;
+    m.names = {};
+  }
+  {
+    std::vector<std::string> names;
+    for (const auto& m : project.mods) for (std::size_t d = 1; d < m.defs.size(); ++d) names.push_back(m.defs[d].name);
+    frontends::finalize_name_uses(uses, names);
+    frontends::finalize_name_uses(test_uses, std::move(names));
+  }
 
   Graph g;
   g.source = root.string();
@@ -1395,6 +1438,19 @@ Graph extract_js_files(const fs::path& root, const std::vector<fs::path>& rel_fi
       n.loc = SourceLoc{m.path, df.line, df.end_line, std::nullopt};
       n.frontend = "js";
       if (!df.accessor.empty()) n.attrs = {{"accessor", df.accessor}};
+      if (d > 0) {
+        // For the unused-code analysis (docs/frontends.md). Local: not exported from its file
+        // (top level), inside a function, or a #private member.
+        const bool override_of_outside = m.defs[std::size_t(df.parent)].kind == DefKind::Class &&
+                                         project.has_outside_base({static_cast<int>(mi), df.parent});
+        if (override_of_outside || frontends::name_used(uses, df.name)) n.attrs["referenced"] = true;
+        else if (frontends::name_used(test_uses, df.name)) n.attrs["referenced_by_tests"] = true;
+        const Def& parent = m.defs[std::size_t(df.parent)];
+        bool exported = false;
+        for (const auto& [_, e] : m.exports) exported = exported || (e.kind == Export::Kind::Local && e.name == df.name);
+        const bool local = (df.parent == 0 && !exported) || parent.kind == DefKind::Function || df.name.starts_with("#");
+        if (local) n.attrs["local"] = true;
+      }
       g.add_node(std::move(n));
     }
   }

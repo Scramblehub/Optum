@@ -3,7 +3,9 @@
 #include <fnmatch.h>
 
 #include <algorithm>
+#include <unordered_map>
 
+#include "optum/elf.hpp"
 #include "optum/frontends/binary.hpp"
 #include "optum/frontends/c.hpp"
 #include "optum/frontends/js.hpp"
@@ -268,6 +270,51 @@ bool matches_any(const std::vector<std::string>& patterns, const fs::path& rel) 
     const std::string& subject = p.find('/') == std::string::npos ? name : full;
     return fnmatch(p.c_str(), subject.c_str(), 0) == 0;
   });
+}
+
+void mark_names_in_binaries(Graph& g, const std::filesystem::path& root,
+                            const std::vector<std::filesystem::path>& files) {
+  std::unordered_map<std::string, std::vector<NodeIndex>> candidates;
+  for (NodeIndex i = 0; i < g.nodes().size(); ++i) {
+    const Node& n = g.node(i);
+    if (n.frontend == "binary" || !n.attrs.value("local", false) || n.attrs.value("referenced", false)) continue;
+    if (n.name.size() >= 3) candidates[n.name].push_back(i);
+  }
+  if (candidates.empty()) return;
+  std::vector<NodeIndex> found;
+  for (const auto& rel : files) {
+    const std::filesystem::path p = root / rel;
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(p, ec) || !elf::is_elf(p)) continue;
+    elf::File f;
+    try {
+      f = elf::read(p);
+    } catch (const IrError&) {
+      continue;
+    }
+    for (const elf::Section& s : f.sections) {
+      if (s.type != 1 || s.executable() || !(s.flags & 0x2)) continue;  // allocated PROGBITS data
+      const auto bytes = f.bytes(s);
+      std::size_t start = 0;
+      for (std::size_t i = 0; i <= bytes.size(); ++i) {
+        if (i < bytes.size() && bytes[i] != 0) continue;
+        if (i - start >= 3 && i - start <= 128) {
+          const std::string str(reinterpret_cast<const char*>(bytes.data()) + start, i - start);
+          if (auto it = candidates.find(str); it != candidates.end()) {
+            found.insert(found.end(), it->second.begin(), it->second.end());
+            candidates.erase(it);
+          }
+        }
+        start = i + 1;
+      }
+    }
+    if (candidates.empty()) break;
+  }
+  for (NodeIndex i : found) {
+    Node n = g.node(i);
+    n.attrs = {{"referenced", true}, {"referenced_from", "binary"}};
+    g.add_node(std::move(n));
+  }
 }
 
 }  // namespace optum

@@ -1,0 +1,9 @@
+{
+  "about": "Answer key for optum diagnose: planted unused definitions in Python, JS and C, and one used only by tests. Every decoy (dispatch table, decorator registration, getattr by name, __all__, dunder, framework hook, public API, callback, export, #private used internally, macro use, function-pointer table) must not be reported.",
+  "findings": [
+    {"kind": "unused", "units": ["py:billing"], "targets": ["py:billing.invoices.Invoice._recompute", "py:billing.invoices._legacy_rounding", "py:billing.invoices._old_tax_table"]},
+    {"kind": "unused", "units": ["js:web"], "targets": ["js:web/app.js#Cart.#recount", "js:web/app.js#unusedFormatter"]},
+    {"kind": "unused", "units": ["c:native"], "targets": ["c:native/codec.c#legacy_checksum", "c:native/codec.c#old_decoder"]},
+    {"kind": "test_only", "units": ["py:billing"], "targets": ["py:billing.invoices._only_tested"]}
+  ]
+}
