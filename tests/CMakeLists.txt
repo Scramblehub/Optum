@@ -116,11 +116,37 @@ add_test(NAME cli_score_detects_gaps
                  ${FIXTURES}/ir/valid/order_sync.json --min-recall 0.5)
 set_tests_properties(cli_score_detects_gaps PROPERTIES WILL_FAIL TRUE)
 
+# Each C sample compiles cleanly; http_glue needs the libcurl and sqlite headers (CI installs them).
 find_program(GCC gcc)
+include(CheckIncludeFile)
+check_include_file(curl/curl.h HAVE_CURL_H)
+check_include_file(sqlite3.h HAVE_SQLITE3_H)
 if(GCC)
-  file(GLOB_RECURSE C_FIXTURES ${FIXTURES}/programs/c/*.c)
-  add_test(NAME fixture_c_compiles COMMAND ${GCC} -Wall -Wextra -Werror -fsyntax-only ${C_FIXTURES})
+  file(GLOB C_PROGRAMS LIST_DIRECTORIES true ${FIXTURES}/programs/c/*)
+  foreach(dir ${C_PROGRAMS})
+    if(NOT IS_DIRECTORY ${dir})
+      continue()
+    endif()
+    get_filename_component(name ${dir} NAME)
+    if(name STREQUAL "http_glue" AND NOT (HAVE_CURL_H AND HAVE_SQLITE3_H))
+      message(STATUS "libcurl/sqlite headers not found: skipping fixture_c_compiles_http_glue")
+      continue()
+    endif()
+    file(GLOB_RECURSE srcs ${dir}/*.c)
+    add_test(NAME fixture_c_compiles_${name} COMMAND ${GCC} -Wall -Wextra -Werror -fsyntax-only ${srcs})
+  endforeach()
 endif()
+
+# The C frontend against each sample program (all edges, hard ones included, at 100%).
+foreach(dir ${C_PROGRAMS})
+  if(NOT IS_DIRECTORY ${dir})
+    continue()
+  endif()
+  get_filename_component(name ${dir} NAME)
+  set(out ${CMAKE_CURRENT_BINARY_DIR}/produced_c_${name}.json)
+  add_test(NAME frontend_c_${name}
+           COMMAND sh -c "$<TARGET_FILE:optum> graph ${dir} -q -o ${out} && $<TARGET_FILE:optum> score ${dir}/expected.json ${out} --min-precision 1 --min-recall 1")
+endforeach()
 
 # The published JSON Schema must agree with the C++ reader on the fixtures.
 find_package(Python3 COMPONENTS Interpreter)

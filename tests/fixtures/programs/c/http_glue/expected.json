@@ -1,0 +1,35 @@
+{
+  "ir_version": "0.1.0",
+  "source": "tests/fixtures/programs/c/http_glue",
+  "nodes": [
+    {"id": "c:sync.c", "kind": "module", "name": "sync.c", "frontend": "c"},
+    {"id": "c:<curl/curl.h>", "kind": "module", "name": "curl/curl.h", "frontend": "c", "attrs": {"third_party": true}},
+    {"id": "c:<sqlite3.h>", "kind": "module", "name": "sqlite3.h", "frontend": "c", "attrs": {"third_party": true}},
+    {"id": "c:sync.c#fetch_orders", "kind": "function", "name": "fetch_orders", "frontend": "c"},
+    {"id": "c:sync.c#push_deal", "kind": "function", "name": "push_deal", "frontend": "c"},
+    {"id": "c:sync.c#close_deal", "kind": "function", "name": "close_deal", "frontend": "c"},
+    {"id": "c:sync.c#log_order", "kind": "function", "name": "log_order", "frontend": "c"},
+    {"id": "c:sync.c#sync_once", "kind": "function", "name": "sync_once", "frontend": "c"},
+    {"id": "http:shop.example.com/api/orders", "kind": "external", "name": "shop.example.com/api/orders", "frontend": "c"},
+    {"id": "http:crm.example.com/api/deals", "kind": "external", "name": "crm.example.com/api/deals", "frontend": "c"},
+    {"id": "http:crm.example.com/api/deals/{}", "kind": "external", "name": "crm.example.com/api/deals/{}", "frontend": "c"},
+    {"id": "sql:orders", "kind": "store", "name": "orders", "frontend": "c"}
+  ],
+  "edges": [
+    {"from": "c:sync.c", "to": "c:sync.c#fetch_orders", "kind": "defines"},
+    {"from": "c:sync.c", "to": "c:sync.c#push_deal", "kind": "defines"},
+    {"from": "c:sync.c", "to": "c:sync.c#close_deal", "kind": "defines"},
+    {"from": "c:sync.c", "to": "c:sync.c#log_order", "kind": "defines"},
+    {"from": "c:sync.c", "to": "c:sync.c#sync_once", "kind": "defines"},
+    {"from": "c:sync.c", "to": "c:<curl/curl.h>", "kind": "imports"},
+    {"from": "c:sync.c", "to": "c:<sqlite3.h>", "kind": "imports"},
+    {"from": "c:sync.c#sync_once", "to": "c:sync.c#fetch_orders", "kind": "calls"},
+    {"from": "c:sync.c#sync_once", "to": "c:sync.c#push_deal", "kind": "calls"},
+    {"from": "c:sync.c#sync_once", "to": "c:sync.c#close_deal", "kind": "calls"},
+    {"from": "c:sync.c#sync_once", "to": "c:sync.c#log_order", "kind": "calls"},
+    {"from": "c:sync.c#fetch_orders", "to": "http:shop.example.com/api/orders", "kind": "reads"},
+    {"from": "c:sync.c#push_deal", "to": "http:crm.example.com/api/deals", "kind": "sends_to"},
+    {"from": "c:sync.c#close_deal", "to": "http:crm.example.com/api/deals/{}", "kind": "sends_to"},
+    {"from": "c:sync.c#log_order", "to": "sql:orders", "kind": "writes"}
+  ]
+}

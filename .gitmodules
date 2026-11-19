@@ -26,3 +26,7 @@
 	path = External_Libraries/tree-sitter-typescript
 	url = https://github.com/tree-sitter/tree-sitter-typescript.git
 	shallow = true
+[submodule "External_Libraries/tree-sitter-c"]
+	path = External_Libraries/tree-sitter-c
+	url = https://github.com/tree-sitter/tree-sitter-c.git
+	shallow = true

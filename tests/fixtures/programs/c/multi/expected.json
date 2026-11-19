@@ -1,0 +1,39 @@
+{
+  "ir_version": "0.1.0",
+  "source": "tests/fixtures/programs/c/multi",
+  "nodes": [
+    {"id": "c:src/util.h", "kind": "module", "name": "util.h", "frontend": "c"},
+    {"id": "c:src/util.c", "kind": "module", "name": "util.c", "frontend": "c"},
+    {"id": "c:src/app.c", "kind": "module", "name": "app.c", "frontend": "c"},
+    {"id": "c:src/util.h#twice", "kind": "function", "name": "twice", "frontend": "c"},
+    {"id": "c:src/util.c#helper", "kind": "function", "name": "helper", "frontend": "c"},
+    {"id": "c:src/util.c#clamp", "kind": "function", "name": "clamp", "frontend": "c"},
+    {"id": "c:src/util.c#checksum", "kind": "function", "name": "checksum", "frontend": "c"},
+    {"id": "c:src/app.c#helper", "kind": "function", "name": "helper", "frontend": "c"},
+    {"id": "c:src/app.c#inc", "kind": "function", "name": "inc", "frontend": "c"},
+    {"id": "c:src/app.c#dec", "kind": "function", "name": "dec", "frontend": "c"},
+    {"id": "c:src/app.c#run", "kind": "function", "name": "run", "frontend": "c"},
+    {"id": "c:src/app.c#main", "kind": "function", "name": "main", "frontend": "c"}
+  ],
+  "edges": [
+    {"from": "c:src/util.h", "to": "c:src/util.h#twice", "kind": "defines"},
+    {"from": "c:src/util.c", "to": "c:src/util.c#helper", "kind": "defines"},
+    {"from": "c:src/util.c", "to": "c:src/util.c#clamp", "kind": "defines"},
+    {"from": "c:src/util.c", "to": "c:src/util.c#checksum", "kind": "defines"},
+    {"from": "c:src/app.c", "to": "c:src/app.c#helper", "kind": "defines"},
+    {"from": "c:src/app.c", "to": "c:src/app.c#inc", "kind": "defines"},
+    {"from": "c:src/app.c", "to": "c:src/app.c#dec", "kind": "defines"},
+    {"from": "c:src/app.c", "to": "c:src/app.c#run", "kind": "defines"},
+    {"from": "c:src/app.c", "to": "c:src/app.c#main", "kind": "defines"},
+    {"from": "c:src/util.c", "to": "c:src/util.h", "kind": "imports"},
+    {"from": "c:src/app.c", "to": "c:src/util.h", "kind": "imports"},
+    {"from": "c:src/util.c#checksum", "to": "c:src/util.c#helper", "kind": "calls"},
+    {"from": "c:src/util.c#checksum", "to": "c:src/util.c#clamp", "kind": "calls"},
+    {"from": "c:src/app.c#helper", "to": "c:src/util.h#twice", "kind": "calls"},
+    {"from": "c:src/app.c#main", "to": "c:src/util.c#checksum", "kind": "calls"},
+    {"from": "c:src/app.c#main", "to": "c:src/app.c#helper", "kind": "calls"},
+    {"from": "c:src/app.c#main", "to": "c:src/app.c#run", "kind": "calls"},
+    {"from": "c:src/app.c#run", "to": "c:src/app.c#inc", "kind": "calls", "attrs": {"difficulty": "hard"}},
+    {"from": "c:src/app.c#run", "to": "c:src/app.c#dec", "kind": "calls", "attrs": {"difficulty": "hard"}}
+  ]
+}

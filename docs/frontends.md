@@ -91,49 +91,41 @@ nearest named function, or the module.
 
 ## C
 
+Files: `.c` and `.h`. There's no preprocessor run, so macros aren't expanded in general. Two
+narrow exceptions follow (string macros, and function calls inside function-like macros).
+
 | Thing | Node | Id example |
 |---|---|---|
-| Source file `main.c` | `module` | `c:main.c` |
-| Function (static or not) | `function` | `c:main.c#square` |
+| Source or header file | `module` | `c:src/util.c`, `c:src/util.h` |
+| Function definition (`static` gets `attrs.static: true`) | `function` | `c:src/util.c#checksum` |
+| Non-system header that isn't in the project | `module`, `attrs.third_party: true` | `c:<curl/curl.h>` |
+
+Prototypes aren't nodes, but they decide confidence (below). A `static inline` function defined in
+a header is a node of the header.
 
 | Code | Edge |
 |---|---|
 | File defines function | `defines` |
-| `f()` | `calls`; across files, resolved to the defining file |
-| Call through a function pointer | `calls` to every function that may be stored in it (hard) |
-| libc (`printf`, `malloc`) | none |
+| `#include "x.h"` / `<x.h>` | `imports`: next to the including file, from the root, or a unique project file ending in it. C and POSIX system headers give no edge; others become `third_party` modules |
+| `f()` | `calls`, resolved like the linker: the same file, then headers it includes (also through other headers), then a unique non-`static` definition. That last case is `exact` only if the caller sees a prototype for `f`; otherwise `inferred`, `attrs.via: "name_only"`, since it may belong to another program in the repo |
+| `MACRO(...)` naming a function-like macro of the project | `calls` to the project functions its body calls, followed through nested macros; `attrs.via: "macro"` |
+| A call through a function pointer (`fp(x)`, `ops->run(x)`, a parameter) | `calls` to every function whose address is taken somewhere (named outside a call) **with the same number of parameters**; at most 12, else none. `inferred`, `attrs.via: "function_pointer"` (hard) |
+| A call inside `#if` / `#ifdef` / `#else` | as above, with `attrs.condition` (e.g. `"ZLIB_DEBUG"`, `"not (HAVE_MEMCPY)"`): it happens in some build configurations |
+| libc and other libraries' functions | none |
+| `curl_easy_setopt(h, CURLOPT_URL, url)` | `reads` / `sends_to` an `http:` node. The method comes from the function's other options (`CURLOPT_POST`/`POSTFIELDS` → POST, `CUSTOMREQUEST "PATCH"`, `UPLOAD` → PUT, `NOBODY` → HEAD; default GET). URLs from literals, `#define` strings, string constants, `"lit" MACRO` concatenation and `snprintf`/`sprintf` into a local buffer (conversions become `{}`) |
+| `sqlite3_exec` / `sqlite3_prepare*`, `PQexec` / `PQexecParams` / `PQprepare`, `mysql_query` with SQL text | `reads` / `writes` `sql:<table>` nodes |
 
-Binaries (`exp/frontend-binary`) map recovered functions to the same `c:` ids through debug
-symbols where possible, so the binary graph can be scored against the source graph.
-
-## n8n (external adapter)
-
-[Core/adapters/n8n/optum_n8n.py](../Core/adapters/n8n/optum_n8n.py), run with
-`--adapter "python3 Core/adapters/n8n/optum_n8n.py"`. Reads n8n workflow exports (one workflow, or
-a list of them, per `.json` file); other JSON is skipped.
-
-| Thing | Node | Id example |
-|---|---|---|
-| Workflow | `program`, `attrs.active` | `n8n:wf-order-crm` (the workflow's id, else the file name) |
-| n8n node | `step`, `attrs.type`, `attrs.trigger` for triggers | `n8n:wf-order-crm/Create deal` |
-| SaaS integration (Slack, HubSpot...) | `external`, `attrs.service` | `saas:slack` |
-
-| Workflow content | Edge |
-|---|---|
-| Workflow contains step | `defines` |
-| Connection A → B (any output) | `triggers` |
-| HTTP Request step | `reads` (GET/HEAD/OPTIONS) or `sends_to` to `http:...`; `{{ expressions }}` in the URL become `{}` and make it `inferred` |
-| Postgres / MySQL / MSSQL step with a table | `reads` (select) or `writes` (insert, update, upsert, delete) to `sql:<table>`. Raw `executeQuery` isn't analysed yet (reported on stderr) |
-| Any other non-core node type | `reads` (get/getAll/search operations) or `sends_to` to `saas:<service>` |
-
-Logic and plumbing nodes (If, Switch, Set, Code, Merge, Wait, triggers, sticky notes...) are steps
-with no outside edges.
+Binaries (`docs/plans/binary.md`) map functions with debug info to these same `c:` ids, so a
+binary's graph can be scored against, and merged with, its source graph.
 
 ## Known gaps (0.1)
 
 - No `extends` edge for inheritance: the graph can't yet say "Square is a Shape". Candidate for
   IR 0.2.
 - Class attributes, globals and module constants (`HANDLERS`, `SHOP`) aren't nodes.
+- C: no preprocessor, so code that only parses after expansion (heavy `EXPORT`/`FAR`-style macros)
+  is read through tree-sitter's error recovery; object-like macros that rename functions
+  (`#define zmemcpy memcpy`) aren't followed; C++ isn't supported (a `.h` may hold C++).
 - JS: object-literal methods aren't nodes; `axios.create({ baseURL })` clients and `tsconfig.json`
   path aliases aren't followed; destructured parameters don't get types from their annotation.
 - n8n: Code nodes' JavaScript and raw SQL queries aren't analysed; sub-workflow calls

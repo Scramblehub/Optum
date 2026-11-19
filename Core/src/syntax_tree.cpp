@@ -10,6 +10,7 @@ extern "C" const TSLanguage* tree_sitter_python();
 extern "C" const TSLanguage* tree_sitter_javascript();
 extern "C" const TSLanguage* tree_sitter_typescript();
 extern "C" const TSLanguage* tree_sitter_tsx();
+extern "C" const TSLanguage* tree_sitter_c();
 
 namespace optum {
 
@@ -20,6 +21,7 @@ std::string syntax_tree(const std::filesystem::path& file) {
   else if (ext == ".js" || ext == ".jsx" || ext == ".mjs" || ext == ".cjs") lang = tree_sitter_javascript();
   else if (ext == ".ts" || ext == ".mts" || ext == ".cts") lang = tree_sitter_typescript();
   else if (ext == ".tsx") lang = tree_sitter_tsx();
+  else if (ext == ".c" || ext == ".h") lang = tree_sitter_c();
   else throw IrError("no grammar for '" + ext + "' files");
   const std::string src = frontends::read_file(file);
   ts::ParserPtr parser(ts_parser_new());

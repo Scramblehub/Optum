@@ -4,6 +4,7 @@
 
 #include <algorithm>
 
+#include "optum/frontends/c.hpp"
 #include "optum/frontends/js.hpp"
 #include "optum/frontends/python.hpp"
 #include "optum/process.hpp"
@@ -57,6 +58,30 @@ class JsFrontend : public Frontend {
     JsStats stats;
     Extraction x;
     x.graph = extract_js_files(root, files, &stats, threads_);
+    x.summary = std::to_string(stats.files) + " files, " + std::to_string(stats.lines) + " lines";
+    if (stats.files_with_syntax_errors) {
+      x.summary += " (" + std::to_string(stats.files_with_syntax_errors) + " with syntax errors)";
+    }
+    return x;
+  }
+
+ private:
+  FrontendInfo info_;
+  unsigned threads_;
+};
+
+class CFrontend : public Frontend {
+ public:
+  explicit CFrontend(unsigned threads) : threads_(threads) {
+    info_.name = "c";
+    info_.version = "builtin";
+    info_.file_patterns = {"*.c", "*.h"};
+  }
+  const FrontendInfo& info() const override { return info_; }
+  Extraction extract(const fs::path& root, const std::vector<fs::path>& files) override {
+    CStats stats;
+    Extraction x;
+    x.graph = extract_c_files(root, files, &stats, threads_);
     x.summary = std::to_string(stats.files) + " files, " + std::to_string(stats.lines) + " lines";
     if (stats.files_with_syntax_errors) {
       x.summary += " (" + std::to_string(stats.files_with_syntax_errors) + " with syntax errors)";
@@ -169,6 +194,7 @@ std::unique_ptr<Frontend> make_python_frontend(unsigned threads) {
 }
 
 std::unique_ptr<Frontend> make_js_frontend(unsigned threads) { return std::make_unique<JsFrontend>(threads); }
+std::unique_ptr<Frontend> make_c_frontend(unsigned threads) { return std::make_unique<CFrontend>(threads); }
 
 std::unique_ptr<Frontend> make_external_frontend(const std::string& command,
                                                  std::chrono::milliseconds timeout) {

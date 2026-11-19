@@ -7,7 +7,7 @@
 
 namespace optum {
 
-// Grammar chosen by extension: .py, .js/.jsx/.mjs/.cjs, .ts, .tsx. Throws IrError otherwise.
+// Grammar chosen by extension: .py, .js/.jsx/.mjs/.cjs, .ts, .tsx, .c/.h. Throws IrError otherwise.
 std::string syntax_tree(const std::filesystem::path& file);
 
 }  // namespace optum

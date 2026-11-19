@@ -42,7 +42,10 @@ add_library(tree_sitter_typescript STATIC
   ${TS_TS_DIR}/typescript/src/parser.c ${TS_TS_DIR}/typescript/src/scanner.c
   ${TS_TS_DIR}/tsx/src/parser.c ${TS_TS_DIR}/tsx/src/scanner.c)
 target_include_directories(tree_sitter_typescript PRIVATE ${TS_TS_DIR}/typescript/src)
-set_target_properties(tree_sitter_javascript tree_sitter_typescript PROPERTIES
+set(TS_C_DIR ${CMAKE_SOURCE_DIR}/External_Libraries/tree-sitter-c/src)
+add_library(tree_sitter_c STATIC ${TS_C_DIR}/parser.c)
+target_include_directories(tree_sitter_c PRIVATE ${TS_C_DIR})
+set_target_properties(tree_sitter_javascript tree_sitter_typescript tree_sitter_c PROPERTIES
   C_STANDARD 11 POSITION_INDEPENDENT_CODE ON)
 
 add_subdirectory(Core)

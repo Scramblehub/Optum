@@ -132,6 +132,7 @@ std::vector<std::unique_ptr<optum::Frontend>> make_frontends(const std::vector<s
   std::vector<std::unique_ptr<optum::Frontend>> out;
   out.push_back(optum::make_python_frontend(threads));
   out.push_back(optum::make_js_frontend(threads));
+  out.push_back(optum::make_c_frontend(threads));
   for (const auto& cmd : adapters) {
     out.push_back(optum::make_external_frontend(cmd, std::chrono::seconds(timeout_s)));
   }
@@ -204,7 +205,7 @@ int main(int argc, char** argv) {
 
   std::string tree_path;
   auto* tree_cmd = app.add_subcommand("syntax-tree", "Developer aid: print a file's tree-sitter syntax tree");
-  tree_cmd->add_option("file", tree_path, ".py, .js, .ts or .tsx file")->required();
+  tree_cmd->add_option("file", tree_path, ".py, .js, .ts, .tsx, .c or .h file")->required();
 
   CLI11_PARSE(app, argc, argv);
 

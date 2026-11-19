@@ -20,8 +20,8 @@ jobs:
           python-version: "3.12"
       - name: Install schema test tools
         run: pip install jsonschema
-      - name: Install Graphviz (SVG export tests)
-        run: sudo apt-get update -q && sudo apt-get install -y -q graphviz
+      - name: Install Graphviz and C library headers (SVG export and C sample tests)
+        run: sudo apt-get update -q && sudo apt-get install -y -q graphviz libcurl4-openssl-dev libsqlite3-dev
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
       - name: Build
