@@ -171,6 +171,30 @@ if(Python3_FOUND AND NOT NO_JSONSCHEMA)
   add_test(NAME schema_accepts_expected COMMAND ${VALIDATE} ${PROGRAM_EXPECTED})
 endif()
 
+# Runtime traces (docs/verify.md): the Python tracer runs each runnable sample, and every call it
+# observes must be in the graph, except the hard edges `dynamic` misses by design (5 of 10).
+if(Python3_FOUND)
+  set(PY_VERIFY_MIN_dynamic 0.5)
+  foreach(case basic_calls:app.py classes:shapes.py imports:main.py sql_store:store.py dynamic:plugins.py shadowing:main.py)
+    string(REPLACE ":" ";" parts ${case})
+    list(GET parts 0 name)
+    list(GET parts 1 script)
+    set(min 1)
+    if(DEFINED PY_VERIFY_MIN_${name})
+      set(min ${PY_VERIFY_MIN_${name}})
+    endif()
+    set(dir ${FIXTURES}/programs/python/${name})
+    set(g ${CMAKE_CURRENT_BINARY_DIR}/verify_${name}_graph.json)
+    set(tr ${CMAKE_CURRENT_BINARY_DIR}/verify_${name}_trace.json)
+    add_test(NAME verify_python_${name}
+             COMMAND sh -c "${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/Core/tracers/python_trace.py --root ${dir} -o ${tr} -- ${dir}/${script} > /dev/null && $<TARGET_FILE:optum> graph ${dir} -q -o ${g} && $<TARGET_FILE:optum> verify ${g} ${tr} --min-recall ${min}")
+  endforeach()
+  file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/bad_trace.json "{\"trace_version\": \"9.0\", \"calls\": []}")
+  add_test(NAME cli_verify_rejects_bad_trace
+           COMMAND optum verify ${FIXTURES}/ir/valid/minimal.json ${CMAKE_CURRENT_BINARY_DIR}/bad_trace.json)
+  set_tests_properties(cli_verify_rejects_bad_trace PROPERTIES PASS_REGULAR_EXPRESSION "unsupported trace_version '9.0'")
+endif()
+
 # External adapters (docs/protocol.md). Need Python, but not jsonschema.
 if(Python3_FOUND)
   set(N8N "${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/Core/adapters/n8n/optum_n8n.py")

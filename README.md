@@ -4,7 +4,7 @@ Optum breaks software down into one graph of what it does, simplifies it, and re
 tool sprawl as one system the company owns. See [Optum-concept.md](Optum-concept.md) for the full
 concept and [docs/ROADMAP.md](docs/ROADMAP.md) for the build plan.
 
-Status: **pre-alpha, Phase 1.** Built-in frontends for **Python**, **JavaScript/TypeScript**, **C** and **x86-64 ELF binaries**:
+Status: **v0.1 (Phase 1 done, [changelog](docs/CHANGELOG.md)); Phase 2 next.** Built-in frontends for **Python**, **JavaScript/TypeScript**, **C** and **x86-64 ELF binaries**:
 `optum graph <dir>` breaks a codebase down into one graph (the Python 3.12 standard library,
 285k lines, takes about 0.15 s).
 Other languages and tools plug in as adapters in any language ([docs/protocol.md](docs/protocol.md));
@@ -39,6 +39,7 @@ Commands:
 | `optum check <files...>` | Validate graph files; errors name the exact field |
 | `optum merge <files...> [-o out.json]` | Merge graphs by node id |
 | `optum score <expected> <produced>` | Precision and recall of a produced graph against a hand-checked one |
+| `optum verify <graph.json> <trace.json>` | How many calls observed at runtime the graph has ([docs/verify.md](docs/verify.md)) |
 
 Both `graph` and `export` take view options (`--level module`, `--focus <node>`, `--edges calls,reads`,
 `--no-inferred`); see [docs/diagrams.md](docs/diagrams.md).

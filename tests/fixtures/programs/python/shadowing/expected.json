@@ -1,0 +1,20 @@
+{
+  "ir_version": "0.1.0",
+  "source": "tests/fixtures/programs/python/shadowing",
+  "nodes": [
+    {"id": "py:main", "kind": "module", "name": "main", "frontend": "python"},
+    {"id": "py:pkg", "kind": "module", "name": "pkg", "frontend": "python"},
+    {"id": "py:pkg.cli", "kind": "module", "name": "cli", "frontend": "python"},
+    {"id": "py:pkg.cli@def", "kind": "function", "name": "cli", "frontend": "python"},
+    {"id": "py:pkg.cli.run", "kind": "function", "name": "run", "frontend": "python"}
+  ],
+  "edges": [
+    {"from": "py:pkg", "to": "py:pkg.cli", "kind": "defines"},
+    {"from": "py:pkg", "to": "py:pkg.cli@def", "kind": "defines"},
+    {"from": "py:pkg.cli", "to": "py:pkg.cli.run", "kind": "defines"},
+    {"from": "py:pkg", "to": "py:pkg.cli", "kind": "imports"},
+    {"from": "py:main", "to": "py:pkg", "kind": "imports"},
+    {"from": "py:pkg.cli@def", "to": "py:pkg.cli.run", "kind": "calls"},
+    {"from": "py:main", "to": "py:pkg.cli@def", "kind": "calls"}
+  ]
+}
