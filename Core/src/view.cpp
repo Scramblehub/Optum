@@ -163,7 +163,17 @@ NodeIndex module_of(const Graph& g, NodeIndex n) { return module_with(g, parents
 Graph make_view(const Graph& g, const ViewOptions& o) {
   Graph v = filter_edges(g, o);
   if (o.level == Level::Module) v = collapse_to_modules(v);
-  if (!o.focus.empty()) v = neighbourhood(v, resolve_node(v, o.focus), std::max(o.depth, 0));
+  if (!o.focus.empty()) {
+    try {
+      v = neighbourhood(v, resolve_node(v, o.focus), std::max(o.depth, 0));
+    } catch (const IrError& e) {
+      if (o.level != Level::Module) throw;
+      // At module level only modules, programs and non-code nodes remain; say so.
+      throw IrError(std::string(e.what()) +
+                    "\n(at module level, functions are folded into their modules: focus on a "
+                    "module, or use function level)");
+    }
+  }
   return v;
 }
 

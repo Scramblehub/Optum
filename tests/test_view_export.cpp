@@ -101,6 +101,38 @@ TEST_CASE("focus keeps neighbours within depth plus their containers") {
   REQUIRE(v.find("py:b"));
 }
 
+TEST_CASE("focus on a function at module level explains why it is not found") {
+  ViewOptions o;
+  o.level = Level::Module;
+  o.focus = "py:a.f";
+  REQUIRE_THROWS_WITH(make_view(sample(), o), ContainsSubstring("folded into their modules"));
+  o.level = Level::Function;
+  REQUIRE_NOTHROW(make_view(sample(), o));
+}
+
+TEST_CASE("focus with depth 0 keeps only the node and its containers") {
+  ViewOptions o;
+  o.focus = "py:a.f";
+  o.depth = 0;
+  const Graph v = make_view(sample(), o);
+  REQUIRE(v.nodes().size() == 2);
+  REQUIRE(v.find("py:a.f"));
+  REQUIRE(v.find("py:a"));
+}
+
+TEST_CASE("module_of survives a cycle of defines edges") {
+  Graph g;
+  for (const char* id : {"x", "y"}) {
+    Node n;
+    n.id = id;
+    n.kind = NodeKind::Function;
+    g.add_node(n);
+  }
+  g.add_edge("x", "y", EdgeKind::Defines);
+  g.add_edge("y", "x", EdgeKind::Defines);
+  REQUIRE(module_of(g, *g.find("x")) == *g.find("x"));
+}
+
 TEST_CASE("dot: clusters, styles, legend, escaping") {
   Graph g = sample();
   Node odd;
