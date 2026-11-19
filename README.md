@@ -4,7 +4,8 @@ Optum breaks software down into one graph of what it does, simplifies it, and re
 tool sprawl as one system the company owns. See [Optum-concept.md](Optum-concept.md) for the full
 concept and [docs/ROADMAP.md](docs/ROADMAP.md) for the build plan.
 
-Status: **pre-alpha, Phase 0.** The CLI runs, but has no frontends yet.
+Status: **pre-alpha, Phase 1.** The graph format and CLI work; no frontends yet, so `optum graph`
+returns an empty graph.
 
 ## Build
 
@@ -17,6 +18,16 @@ cmake --preset debug && cmake --build --preset debug -j
 ctest --preset debug
 ./build/debug/Core/optum graph .
 ```
+
+Commands:
+
+| Command | Does |
+|---|---|
+| `optum graph <path>` | Break code down into a graph (JSON). Empty until the first frontend lands |
+| `optum check <files...>` | Validate graph files; errors name the exact field |
+| `optum merge <files...> [-o out.json]` | Merge graphs by node id |
+
+The graph format is documented in [docs/ir.md](docs/ir.md). Schema tests need `pip install jsonschema`.
 
 Presets: `debug`, `release`, and `asan` (AddressSanitizer + UBSan; CI runs all three).
 

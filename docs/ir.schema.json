@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Scramblehub/Optum/docs/ir.schema.json",
+  "title": "Optum system graph (IR) 0.1",
+  "description": "See docs/ir.md. Checks shape only: unique ids and edges pointing at existing nodes are checked by `optum check`.",
+  "type": "object",
+  "required": ["ir_version", "nodes", "edges"],
+  "additionalProperties": false,
+  "properties": {
+    "ir_version": { "type": "string", "pattern": "^0\\.1\\.[0-9]+$" },
+    "source": { "type": "string" },
+    "nodes": { "type": "array", "items": { "$ref": "#/$defs/node" } },
+    "edges": { "type": "array", "items": { "$ref": "#/$defs/edge" } }
+  },
+  "$defs": {
+    "confidence": { "enum": ["inferred", "observed", "exact"] },
+    "loc": {
+      "type": "object",
+      "required": ["file"],
+      "additionalProperties": false,
+      "properties": {
+        "file": { "type": "string" },
+        "line": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "end_line": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "address": { "type": "string", "pattern": "^0[xX][0-9a-fA-F]{1,16}$" }
+      }
+    },
+    "node": {
+      "type": "object",
+      "required": ["id", "kind"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["program", "module", "function", "data_type", "store", "external", "step"] },
+        "name": { "type": "string" },
+        "loc": { "$ref": "#/$defs/loc" },
+        "frontend": { "type": "string" },
+        "confidence": { "$ref": "#/$defs/confidence" },
+        "attrs": { "type": "object" }
+      }
+    },
+    "edge": {
+      "type": "object",
+      "required": ["from", "to", "kind"],
+      "additionalProperties": false,
+      "properties": {
+        "from": { "type": "string", "minLength": 1 },
+        "to": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["calls", "imports", "defines", "reads", "writes", "sends_to", "triggers"] },
+        "loc": { "$ref": "#/$defs/loc" },
+        "frontend": { "type": "string" },
+        "confidence": { "$ref": "#/$defs/confidence" },
+        "attrs": { "type": "object" }
+      }
+    }
+  }
+}

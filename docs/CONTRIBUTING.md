@@ -10,6 +10,7 @@ Kept short on purpose. Change it when it stops fitting.
   - `fix/<name>`: a bug fix
   - `exp/<name>`: a research spike that may be thrown away. Merge only what's worth keeping, or
     just write down what you learned in `docs/notes/`
+  - `perf/<name>`: making something faster without changing what it does
   - `docs/<name>`: documentation only
 - Merge through a pull request, even working alone. The PR description is the record of why.
 - Messy first, clean later: a branch may merge rough, as long as `main` still passes its tests and

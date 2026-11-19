@@ -74,6 +74,7 @@ Each line is a branch. Size is a rough guess for part-time solo work.
 | Branch | Job | Size |
 |---|---|---|
 | `feat/ir-core` | IR types in C++, JSON Schema, load/save, merge two graphs, `docs/ir.md` | 1 week |
+| `perf/ir-json` | Streaming JSON reader/writer (e.g. simdjson or a SAX parser) and lighter node storage; target: the 1M-node graph loads in under 2 s and 1 GB | 3–4 days |
 | `feat/fixtures` | 6–10 small programs in `tests/fixtures/`, each with a hand-written expected graph | 2–3 days, then ongoing |
 | `feat/frontend-python` | tree-sitter integration; modules, functions, calls, imports, HTTP calls (`requests`, `httpx`) as `external` | 1–2 weeks |
 | `feat/export` | Graphviz DOT, Mermaid and JSON export; `optum graph <path> --format svg` | 2 days |
