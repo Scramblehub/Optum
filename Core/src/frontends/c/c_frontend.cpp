@@ -69,6 +69,7 @@ struct ModuleInfo {
   std::string path;
   std::size_t lines = 0;
   bool syntax_error = false;
+  bool unreadable = false;
   std::vector<Func> funcs;
   std::vector<Include> includes;
   std::vector<CallSite> calls;
@@ -738,7 +739,9 @@ Graph extract_c_files(const fs::path& root, const std::vector<fs::path>& rel_fil
     }();
     ModuleInfo& m = project.mods[i];
     m.path = files[i].generic_string();
-    const std::string src = read_file(root / files[i]);
+    bool readable = true;
+    const std::string src = read_file(root / files[i], &readable);
+    m.unreadable = !readable;
     m.lines = static_cast<std::size_t>(std::count(src.begin(), src.end(), '\n'));
     ts::TreePtr tree(ts_parser_parse_string(parser.get(), nullptr, src.data(), static_cast<uint32_t>(src.size())));
     const TSNode rootn = ts_tree_root_node(tree.get());
@@ -795,6 +798,7 @@ Graph extract_c_files(const fs::path& root, const std::vector<fs::path>& rel_fil
     for (const auto& m : project.mods) {
       stats->lines += m.lines;
       stats->files_with_syntax_errors += m.syntax_error ? 1 : 0;
+      if (m.unreadable) stats->unreadable.push_back(m.path);
     }
   }
   return g;
