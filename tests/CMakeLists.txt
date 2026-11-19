@@ -5,6 +5,7 @@ add_executable(optum_tests
   test_score.cpp
   test_python_frontend.cpp
   test_sql_http.cpp
+  test_deep_nesting.cpp
   test_view_export.cpp
   test_process.cpp
   test_frontend_robustness.cpp
