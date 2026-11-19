@@ -89,6 +89,7 @@ class Summarizer {
  private:
   ModuleInfo& m_;
   std::string_view src_;
+  int depth_ = 0;  // recursion depth of walk()
   std::string text(TSNode n) const { return std::string(ts::text(n, src_)); }
   std::vector<std::string> conditions_;  // enclosing #if / #ifdef conditions
 
@@ -120,6 +121,8 @@ class Summarizer {
   }
 
   void walk(TSNode n, int f) {
+    const frontends::DepthGuard guard(depth_);
+    if (guard.too_deep()) return;
     const std::string_view t = ts_node_type(n);
     if (t == "function_definition") return on_function(n);
     if (t == "declaration") return on_declaration(n, f);

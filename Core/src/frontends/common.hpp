@@ -15,6 +15,23 @@
 
 namespace optum::frontends {
 
+// The syntax walkers recurse once per nesting level; `a + b + c + ...` with thousands of terms
+// nests that deep and would overflow the stack. Below this depth nothing is looked at.
+inline constexpr int kMaxWalkDepth = 1000;
+
+// Counts the current recursion depth for as long as it lives; `too_deep()` says to stop.
+class DepthGuard {
+ public:
+  explicit DepthGuard(int& depth) : depth_(depth) { ++depth_; }
+  ~DepthGuard() { --depth_; }
+  DepthGuard(const DepthGuard&) = delete;
+  DepthGuard& operator=(const DepthGuard&) = delete;
+  bool too_deep() const { return depth_ > kMaxWalkDepth; }
+
+ private:
+  int& depth_;
+};
+
 // Runs f(0..n-1) on `threads` workers (0 = all cores).
 template <typename F>
 void parallel_for(std::size_t n, unsigned threads, F&& f) {

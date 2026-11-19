@@ -115,6 +115,7 @@ class Summarizer {
  private:
   ModuleInfo& m_;
   std::string_view src_;
+  int depth_ = 0;  // recursion depth of walk()
 
   std::string text(TSNode n) const { return std::string(ts::text(n, src_)); }
 
@@ -125,6 +126,8 @@ class Summarizer {
   // ds: the def that new definitions belong to (module, class or function).
   // as: the scope calls are attributed to and names are resolved in (function or module).
   void walk(TSNode n, int ds, int as) {
+    const frontends::DepthGuard guard(depth_);
+    if (guard.too_deep()) return;
     const char* type = ts_node_type(n);
     const std::string_view t(type);
     if (t == "function_definition") return on_function(n, ds, as);
@@ -335,6 +338,8 @@ class Summarizer {
   Expr to_expr(TSNode n) {
     Expr e;
     if (ts_node_is_null(n)) return e;
+    const frontends::DepthGuard guard(depth_);
+    if (guard.too_deep()) return e;
     const std::string_view t = ts_node_type(n);
     if (t == "identifier") {
       e.kind = Expr::Kind::Name;
