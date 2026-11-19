@@ -3,12 +3,15 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
+
+#include "optum/ir.hpp"
 
 namespace optum::frontends {
 
@@ -32,6 +35,35 @@ inline std::string read_file(const std::filesystem::path& p) {
   std::stringstream buf;
   buf << in.rdbuf();
   return buf.str();
+}
+
+// ASCII upper-casing, for HTTP method names.
+inline std::string to_upper(std::string s) {
+  for (char& c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+  return s;
+}
+
+// The `external` node for an HTTP endpoint whose id came from http_node_id. A "{}" in the id
+// (a variable part of the URL) makes it `inferred`, otherwise `exact`. Same rule in every frontend.
+inline optum::Node http_external_node(std::string node_id, std::string frontend) {
+  optum::Node n;
+  n.kind = optum::NodeKind::External;
+  n.name = node_id.substr(5);  // without "http:"
+  n.confidence =
+      node_id.find("{}") == std::string::npos ? optum::Confidence::Exact : optum::Confidence::Inferred;
+  n.id = std::move(node_id);
+  n.frontend = std::move(frontend);
+  return n;
+}
+
+// The `store` node for a SQL table whose id came from sql_store_id.
+inline optum::Node sql_store_node(std::string node_id, std::string name, std::string frontend) {
+  optum::Node n;
+  n.id = std::move(node_id);
+  n.kind = optum::NodeKind::Store;
+  n.name = std::move(name);
+  n.frontend = std::move(frontend);
+  return n;
 }
 
 }  // namespace optum::frontends

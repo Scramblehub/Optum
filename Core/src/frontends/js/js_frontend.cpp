@@ -28,7 +28,10 @@ namespace {
 
 namespace fs = std::filesystem;
 using frontends::parallel_for;
+using frontends::http_external_node;
 using frontends::read_file;
+using frontends::sql_store_node;
+using frontends::to_upper;
 
 // ===================================================================== pass 1 data
 
@@ -1153,11 +1156,9 @@ class Linker {
     const SqlTables t = sql_tables(*sql);
     if (t.reads.empty() && t.writes.empty()) return false;
     auto store = [&](const std::string& table, EdgeKind kind) {
-      Node n;
-      n.id = sql_store_id(table);
-      n.kind = NodeKind::Store;
-      n.name = n.id.substr(4);
-      n.frontend = "js";
+      std::string store_id = sql_store_id(table);
+      std::string name = store_id.substr(4);  // without "sql:"
+      Node n = sql_store_node(std::move(store_id), std::move(name), "js");
       std::string to = n.id;
       emit(id(cs.attr), std::move(to), kind, Confidence::Exact, cs.line, nlohmann::json::object(), std::move(n));
     };
@@ -1175,28 +1176,20 @@ class Linker {
     const std::string method = path.substr(dot + 1);
     static const std::unordered_set<std::string> kMethods = {"get", "head", "options", "post", "put", "patch", "delete"};
     if (!kMethods.count(method)) return;
-    std::string upper = method;
-    for (char& c : upper) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    http_edge(cs, upper, false);
+    http_edge(cs, to_upper(method), false);
   }
 
   void http_edge(const CallSite& cs, std::string method, bool fetch_style) {
     if (fetch_style && !cs.method_option.empty()) {
-      method = cs.method_option;
-      for (char& c : method) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+      method = to_upper(cs.method_option);
     }
     if (!cs.first_arg) return;
     const auto url = p_.eval_str(m_, cs.scope, *cs.first_arg, 0);
     if (!url) return;
     const std::string node_id = http_node_id(*url);
     if (node_id.empty()) return;
-    const Confidence c = node_id.find("{}") == std::string::npos ? Confidence::Exact : Confidence::Inferred;
-    Node n;
-    n.id = node_id;
-    n.kind = NodeKind::External;
-    n.name = node_id.substr(5);
-    n.frontend = "js";
-    n.confidence = c;
+    Node n = http_external_node(node_id, "js");
+    const Confidence c = n.confidence;
     const bool reads = method == "GET" || method == "HEAD" || method == "OPTIONS";
     emit(id(cs.attr), node_id, reads ? EdgeKind::Reads : EdgeKind::SendsTo, c, cs.line, {{"method", method}}, std::move(n));
   }
