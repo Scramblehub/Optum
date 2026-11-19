@@ -6,6 +6,13 @@ concept and [docs/ROADMAP.md](docs/ROADMAP.md) for the build plan.
 
 Status: **pre-alpha, Phase 1.** The Python frontend works: `optum graph <dir>` breaks a Python
 codebase down into a graph (the Python 3.12 standard library, 285k lines, takes about 0.15 s).
+Other languages and tools plug in as adapters in any language ([docs/protocol.md](docs/protocol.md));
+the first one reads n8n workflows:
+
+```sh
+./build/debug/Core/optum graph tests/fixtures/programs/mixed/crm_glue \
+    --adapter "python3 Core/adapters/n8n/optum_n8n.py" --level module -f svg -o overlap.svg
+```
 
 ## Build
 
@@ -25,6 +32,7 @@ Commands:
 |---|---|
 | `optum graph <path> [-o out] [-f json\|dot\|svg\|mermaid]` | Break code down into a graph. Python for now |
 | `optum export <graph.json> [-o out.svg]` | Draw a saved graph, or cut a smaller one from it |
+| `optum frontends [path] [--adapter cmd]` | List frontends and which files each would read |
 | `optum check <files...>` | Validate graph files; errors name the exact field |
 | `optum merge <files...> [-o out.json]` | Merge graphs by node id |
 | `optum score <expected> <produced>` | Precision and recall of a produced graph against a hand-checked one |

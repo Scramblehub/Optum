@@ -78,7 +78,7 @@ Each line is a branch. Size is a rough guess for part-time solo work.
 | `feat/fixtures` | 7 sample programs (6 Python, 1 C) with hand-checked expected graphs, conventions in `docs/frontends.md`, and `optum score` (precision/recall per edge kind, hard edges separately) | done; add more as frontends grow |
 | `feat/frontend-python` | tree-sitter integration; modules, functions, classes, calls, imports, HTTP (`requests`, `httpx`) and SQL (`sqlite3`-style `execute`) | done: 100% precision / 95% recall on samples, 93.5% recall on the stdlib ([notes](notes/2026-11-18-python-frontend-eval.md)) |
 | `feat/export` | DOT, SVG (via Graphviz) and Mermaid; views: `--level module`, `--focus`, `--edges`, `--no-inferred` ([docs/diagrams.md](diagrams.md)) | done |
-| `feat/frontend-protocol` | The subprocess adapter protocol for external adapters (built-in frontends use the same C++ interface in-process); ship one sample adapter written in Python to prove a non-C++ adapter works | 4–5 days |
+| `feat/frontend-protocol` | Adapter protocol ([docs/protocol.md](protocol.md)): any program, any language; built-in Python frontend behind the same interface; first adapter: n8n workflows (Python); shared id rules so tools meet on one node | done |
 | `feat/frontend-js` | JS/TS via tree-sitter, through the protocol | 1 week |
 | `feat/trace-verify` | Run a fixture, record which functions actually call which (a Python tracer for Python, `-finstrument-functions` for C), compare with the static graph, report precision and recall. Ignore class-body frames: they look like calls but aren't | 1 week |
 | `feat/viewer` | A local web page: pan, zoom, filter by module or edge type, click through to source | 1 week |
@@ -120,6 +120,20 @@ This is the "test company" from section 11 of the concept doc, kept small, and m
 **Gate v0.3:** one flow in the test company runs on the generated service, the parallel run
 reconciles exactly, and the before/after simplicity numbers from section 3.4 of the concept doc
 are reported.
+
+## Later improvements (backlog)
+
+Picked up when they become the bottleneck, not before. Each is a small branch of its own.
+
+- **Python frontend:** read type hints (`def f(source: Tokenizer)`); track return types of project
+  functions (`x = make_client()`); decorator factories and dispatch tables (the "hard" edges);
+  calls into third-party SDKs (`stripe.Charge.create()`) as `saas:` edges.
+- **n8n adapter:** JavaScript in Code nodes; raw SQL in `executeQuery`; link `executeWorkflow` to
+  the called workflow.
+- **Diagrams:** dark mode; draw package containment as nesting.
+- **Tracing:** turn `tests/tools/stdlib_recall.py` into `feat/trace-verify` (fix the `__init__`
+  artifact).
+- **Speed:** `perf/ir-json` (streaming JSON), once graphs get big enough to need it.
 
 ## Alongside the code
 

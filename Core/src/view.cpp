@@ -19,7 +19,8 @@ std::vector<NodeIndex> parents(const Graph& g) {
 
 NodeIndex module_with(const Graph& g, const std::vector<NodeIndex>& parent, NodeIndex n) {
   for (NodeIndex cur = n, steps = 0; steps < 64; ++steps) {
-    if (g.node(cur).kind == NodeKind::Module) return cur;
+    const NodeKind k = g.node(cur).kind;
+    if (k == NodeKind::Module || k == NodeKind::Program) return cur;  // programs: e.g. workflows
     if (parent[cur] == cur) return n;
     cur = parent[cur];
   }
@@ -77,8 +78,10 @@ Graph collapse_to_modules(const Graph& g) {
   for (const Edge& e : g.edges()) {
     const NodeIndex a = rep[e.from], b = rep[e.to];
     if (a == b) continue;
-    if (e.kind == EdgeKind::Defines &&
-        !(out.node(a).kind == NodeKind::Module && out.node(b).kind == NodeKind::Module)) {
+    auto container = [&](NodeIndex x) {
+      return out.node(x).kind == NodeKind::Module || out.node(x).kind == NodeKind::Program;
+    };
+    if (e.kind == EdgeKind::Defines && !(container(a) && container(b))) {
       continue;
     }
     Agg& x = agg[{a, b, e.kind}];

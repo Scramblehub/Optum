@@ -13,7 +13,7 @@ namespace optum {
 enum class Level { Function, Module };
 
 struct ViewOptions {
-  Level level = Level::Function;  // Module: collapse everything into its module
+  Level level = Level::Function;  // Module: collapse everything into its module or program
   std::string focus;              // node id (or unique id suffix); empty = whole graph
   int depth = 1;                  // with focus: how many edges away to include
   std::vector<EdgeKind> edge_kinds;  // empty = all kinds; `defines` is always kept
@@ -28,8 +28,8 @@ struct ViewOptions {
 // '.', '#', ':' or '/'). Throws IrError naming candidates if none or several match.
 NodeIndex resolve_node(const Graph& g, std::string_view ref);
 
-// The module a node belongs to (following `defines` edges up), or the node itself if it isn't
-// inside one (externals, stores, third-party packages, modules).
+// The module or program (e.g. a workflow) a node belongs to, following `defines` edges up; the
+// node itself if it isn't inside one (externals, stores, third-party packages, modules).
 NodeIndex module_of(const Graph& g, NodeIndex n);
 
 Graph make_view(const Graph& g, const ViewOptions& o);

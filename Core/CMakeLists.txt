@@ -12,6 +12,8 @@ add_library(optum_core
   src/http.cpp
   src/view.cpp
   src/export.cpp
+  src/process.cpp
+  src/frontend.cpp
   src/frontends/python/python_frontend.cpp
 )
 target_include_directories(optum_core PUBLIC include)

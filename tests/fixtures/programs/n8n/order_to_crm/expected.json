@@ -1,0 +1,41 @@
+{
+  "ir_version": "0.1.0",
+  "source": "tests/fixtures/programs/n8n/order_to_crm",
+  "nodes": [
+    {"id": "n8n:wf-order-crm", "kind": "program", "name": "Order to CRM", "frontend": "n8n"},
+    {"id": "n8n:wf-order-crm/Every 15 minutes", "kind": "step", "name": "Every 15 minutes", "frontend": "n8n"},
+    {"id": "n8n:wf-order-crm/Get new orders", "kind": "step", "name": "Get new orders", "frontend": "n8n"},
+    {"id": "n8n:wf-order-crm/Only paid", "kind": "step", "name": "Only paid", "frontend": "n8n"},
+    {"id": "n8n:wf-order-crm/Create deal", "kind": "step", "name": "Create deal", "frontend": "n8n"},
+    {"id": "n8n:wf-order-crm/Mark deal won", "kind": "step", "name": "Mark deal won", "frontend": "n8n"},
+    {"id": "n8n:wf-order-crm/Log order", "kind": "step", "name": "Log order", "frontend": "n8n"},
+    {"id": "n8n:wf-order-crm/Notify sales", "kind": "step", "name": "Notify sales", "frontend": "n8n"},
+    {"id": "n8n:wf-order-crm/Note", "kind": "step", "name": "Note", "frontend": "n8n"},
+    {"id": "http:shop.example.com/api/orders", "kind": "external", "name": "shop.example.com/api/orders", "frontend": "n8n"},
+    {"id": "http:crm.example.com/api/deals", "kind": "external", "name": "crm.example.com/api/deals", "frontend": "n8n"},
+    {"id": "http:crm.example.com/api/deals/{}", "kind": "external", "name": "crm.example.com/api/deals/{}", "frontend": "n8n"},
+    {"id": "sql:orders", "kind": "store", "name": "orders", "frontend": "n8n"},
+    {"id": "saas:slack", "kind": "external", "name": "slack", "frontend": "n8n"}
+  ],
+  "edges": [
+    {"from": "n8n:wf-order-crm", "to": "n8n:wf-order-crm/Every 15 minutes", "kind": "defines"},
+    {"from": "n8n:wf-order-crm", "to": "n8n:wf-order-crm/Get new orders", "kind": "defines"},
+    {"from": "n8n:wf-order-crm", "to": "n8n:wf-order-crm/Only paid", "kind": "defines"},
+    {"from": "n8n:wf-order-crm", "to": "n8n:wf-order-crm/Create deal", "kind": "defines"},
+    {"from": "n8n:wf-order-crm", "to": "n8n:wf-order-crm/Mark deal won", "kind": "defines"},
+    {"from": "n8n:wf-order-crm", "to": "n8n:wf-order-crm/Log order", "kind": "defines"},
+    {"from": "n8n:wf-order-crm", "to": "n8n:wf-order-crm/Notify sales", "kind": "defines"},
+    {"from": "n8n:wf-order-crm", "to": "n8n:wf-order-crm/Note", "kind": "defines"},
+    {"from": "n8n:wf-order-crm/Every 15 minutes", "to": "n8n:wf-order-crm/Get new orders", "kind": "triggers"},
+    {"from": "n8n:wf-order-crm/Get new orders", "to": "n8n:wf-order-crm/Only paid", "kind": "triggers"},
+    {"from": "n8n:wf-order-crm/Only paid", "to": "n8n:wf-order-crm/Create deal", "kind": "triggers"},
+    {"from": "n8n:wf-order-crm/Only paid", "to": "n8n:wf-order-crm/Log order", "kind": "triggers"},
+    {"from": "n8n:wf-order-crm/Create deal", "to": "n8n:wf-order-crm/Mark deal won", "kind": "triggers"},
+    {"from": "n8n:wf-order-crm/Mark deal won", "to": "n8n:wf-order-crm/Notify sales", "kind": "triggers"},
+    {"from": "n8n:wf-order-crm/Get new orders", "to": "http:shop.example.com/api/orders", "kind": "reads"},
+    {"from": "n8n:wf-order-crm/Create deal", "to": "http:crm.example.com/api/deals", "kind": "sends_to"},
+    {"from": "n8n:wf-order-crm/Mark deal won", "to": "http:crm.example.com/api/deals/{}", "kind": "sends_to"},
+    {"from": "n8n:wf-order-crm/Log order", "to": "sql:orders", "kind": "writes"},
+    {"from": "n8n:wf-order-crm/Notify sales", "to": "saas:slack", "kind": "sends_to"}
+  ]
+}

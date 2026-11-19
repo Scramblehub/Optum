@@ -5,9 +5,10 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 
 #include "optum/export.hpp"
-#include "optum/frontends/python.hpp"
+#include "optum/frontend.hpp"
 #include "optum/ir.hpp"
 #include "optum/score.hpp"
 #include "optum/version.hpp"
@@ -125,6 +126,16 @@ int emit(const optum::Graph& g, const ViewCli& v, const std::string& out_path, i
   return v.format == "dot" ? write_text(dot, out_path) : write_svg(dot, out_path);
 }
 
+std::vector<std::unique_ptr<optum::Frontend>> make_frontends(const std::vector<std::string>& adapters,
+                                                            unsigned threads, int timeout_s) {
+  std::vector<std::unique_ptr<optum::Frontend>> out;
+  out.push_back(optum::make_python_frontend(threads));
+  for (const auto& cmd : adapters) {
+    out.push_back(optum::make_external_frontend(cmd, std::chrono::seconds(timeout_s)));
+  }
+  return out;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -146,6 +157,19 @@ int main(int argc, char** argv) {
   graph->add_option("-j,--threads", threads, "Worker threads; 0 = all cores")->capture_default_str();
   graph->add_flag("-q,--quiet", quiet, "Don't print statistics to stderr");
   add_view_options(graph, view);
+  std::vector<std::string> adapters;
+  int adapter_timeout = 300;
+  auto add_adapter_options = [&](CLI::App* cmd) {
+    cmd->add_option("--adapter", adapters, "External frontend command (repeatable); see docs/protocol.md");
+    cmd->add_option("--adapter-timeout", adapter_timeout, "Seconds an adapter may take per request")
+        ->capture_default_str();
+  };
+  add_adapter_options(graph);
+
+  std::string list_path;
+  auto* frontends_cmd = app.add_subcommand("frontends", "List frontends and which files each would read");
+  frontends_cmd->add_option("path", list_path, "Optional: show how many files each would read here");
+  add_adapter_options(frontends_cmd);
 
   std::string export_path;
   auto* exp = app.add_subcommand("export", "Turn a graph JSON file into a diagram or a smaller graph");
@@ -184,20 +208,55 @@ int main(int argc, char** argv) {
         std::cerr << "optum: no such file or directory: " << path << "\n";
         return 2;
       }
-      const auto start = std::chrono::steady_clock::now();
-      optum::PythonStats stats;
-      const optum::Graph g = optum::extract_python(path, &stats, threads);
-      const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                          std::chrono::steady_clock::now() - start).count();
-      if (!quiet) {
-        std::cerr << "python: " << stats.files << " files, " << stats.lines << " lines";
-        if (stats.files_with_syntax_errors) {
-          std::cerr << " (" << stats.files_with_syntax_errors << " with syntax errors)";
+      const auto frontends = make_frontends(adapters, threads, adapter_timeout);
+      const optum::Discovery d = optum::discover(path);
+      optum::Graph g;
+      g.source = path;
+      for (const auto& fe : frontends) {
+        std::vector<std::filesystem::path> mine;
+        for (const auto& f : d.files) {
+          if (optum::matches_any(fe->info().file_patterns, f)) mine.push_back(f);
         }
-        std::cerr << " -> " << g.nodes().size() << " nodes, " << g.edges().size() << " edges in "
-                  << ms << " ms\n";
+        if (mine.empty()) continue;
+        const auto start = std::chrono::steady_clock::now();
+        optum::Extraction x = fe->extract(d.root, mine);
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - start).count();
+        if (!quiet) {
+          for (std::size_t pos = 0; pos < x.diagnostics.size();) {
+            const auto nl = x.diagnostics.find('\n', pos);
+            const auto line = x.diagnostics.substr(pos, nl == std::string::npos ? std::string::npos : nl - pos);
+            if (!line.empty()) std::cerr << "[" << fe->info().name << "] " << line << "\n";
+            if (nl == std::string::npos) break;
+            pos = nl + 1;
+          }
+          std::cerr << fe->info().name << ": " << x.summary << " -> " << x.graph.nodes().size()
+                    << " nodes, " << x.graph.edges().size() << " edges in " << ms << " ms\n";
+        }
+        g.merge(x.graph);
+      }
+      if (!quiet && frontends.size() > 1) {
+        std::cerr << "merged: " << g.nodes().size() << " nodes, " << g.edges().size() << " edges\n";
       }
       return emit(g, view, out_path, indent);
+    }
+    if (*frontends_cmd) {
+      const auto frontends = make_frontends(adapters, 0, adapter_timeout);
+      std::optional<optum::Discovery> d;
+      if (!list_path.empty()) d = optum::discover(list_path);
+      for (const auto& fe : frontends) {
+        const auto& i = fe->info();
+        std::cout << i.name << (i.version.empty() ? "" : " " + i.version) << "  ";
+        for (std::size_t k = 0; k < i.file_patterns.size(); ++k) std::cout << (k ? "," : "") << i.file_patterns[k];
+        if (d) {
+          std::size_t n = 0;
+          for (const auto& f : d->files) n += optum::matches_any(i.file_patterns, f) ? 1 : 0;
+          std::cout << "  (" << n << " files)";
+        }
+        if (!i.command.empty()) std::cout << "  [" << i.command << "]";
+        std::cout << "\n";
+      }
+      return 0;
     }
     if (*exp) return emit(optum::load_graph(export_path), export_view, out_path, indent);
     if (*check) {

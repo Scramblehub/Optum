@@ -5,8 +5,10 @@ add_executable(optum_tests
   test_score.cpp
   test_sql_http.cpp
   test_view_export.cpp
+  test_process.cpp
 )
 target_link_libraries(optum_tests PRIVATE optum_core Catch2::Catch2WithMain)
+target_compile_definitions(optum_tests PRIVATE OPTUM_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 
 include(${CMAKE_SOURCE_DIR}/External_Libraries/Catch2/extras/Catch.cmake)
 catch_discover_tests(optum_tests)
@@ -114,6 +116,45 @@ if(Python3_FOUND AND NOT NO_JSONSCHEMA)
   add_test(NAME fixture_python_compiles
            COMMAND ${Python3_EXECUTABLE} -c "import ast, sys; [ast.parse(open(f).read(), f) for f in sys.argv[1:]]" ${PY_FIXTURES})
   add_test(NAME schema_accepts_expected COMMAND ${VALIDATE} ${PROGRAM_EXPECTED})
-else()
+endif()
+
+# External adapters (docs/protocol.md). Need Python, but not jsonschema.
+if(Python3_FOUND)
+  set(N8N "${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/Core/adapters/n8n/optum_n8n.py")
+  add_test(NAME adapter_n8n_shared_ids
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_shared_ids.py
+                   ${FIXTURES}/ids/url_cases.json ${CMAKE_SOURCE_DIR}/Core/adapters/n8n optum_n8n)
+  foreach(dir n8n/order_to_crm mixed/crm_glue)
+    string(REPLACE "/" "_" name ${dir})
+    set(out ${CMAKE_CURRENT_BINARY_DIR}/produced_${name}.json)
+    add_test(NAME frontend_${name}
+             COMMAND sh -c "$<TARGET_FILE:optum> graph ${FIXTURES}/programs/${dir} -q --adapter '${N8N}' -o ${out} && $<TARGET_FILE:optum> score ${FIXTURES}/programs/${dir}/expected.json ${out} --min-precision 1 --min-recall 1")
+  endforeach()
+  add_test(NAME cli_frontends_lists_adapter
+           COMMAND optum frontends ${FIXTURES}/programs/mixed --adapter "${N8N}")
+  set_tests_properties(cli_frontends_lists_adapter PROPERTIES PASS_REGULAR_EXPRESSION "n8n 0.1.0  \\*.json  \\(2 files\\)")
+
+  # Misbehaving adapters: each must fail with a clear message naming the adapter.
+  set(FAKE "${Python3_EXECUTABLE} ${FIXTURES}/adapters/fake_adapter.py")
+  set(ADAPTER_DIR ${FIXTURES}/adapters)
+  foreach(case "ok|fake adapter ran"
+               "bad_protocol|speaks protocol 'optum-frontend/9.0'"
+               "crash|exited with status 3; last output:.something broke"
+               "not_json|stdout is not JSON"
+               "bad_graph|not a valid graph: nodes.0..kind: unknown node kind 'gizmo'"
+               "slow|no answer within 1 s")
+    string(REPLACE "|" ";" parts "${case}")
+    list(GET parts 0 mode)
+    list(GET parts 1 expect)
+    add_test(NAME adapter_${mode}
+             COMMAND optum graph ${ADAPTER_DIR} --adapter "${FAKE} ${mode}" --adapter-timeout 1)
+    set_tests_properties(adapter_${mode} PROPERTIES PASS_REGULAR_EXPRESSION "${expect}"
+                         FAIL_REGULAR_EXPRESSION "Sanitizer|runtime error|terminate called")
+  endforeach()
+  add_test(NAME adapter_missing_command COMMAND optum graph ${ADAPTER_DIR} --adapter /no/such/adapter)
+  set_tests_properties(adapter_missing_command PROPERTIES PASS_REGULAR_EXPRESSION "adapter '/no/such/adapter': cannot run")
+endif()
+
+if(NOT Python3_FOUND OR NO_JSONSCHEMA)
   message(STATUS "Python jsonschema not found: skipping schema tests (pip install jsonschema)")
 endif()
