@@ -9,6 +9,7 @@
 
 #include "optum/export.hpp"
 #include "optum/frontend.hpp"
+#include "optum/frontends/binary.hpp"
 #include "optum/ir.hpp"
 #include "optum/score.hpp"
 #include "optum/syntax_tree.hpp"
@@ -204,6 +205,11 @@ int main(int argc, char** argv) {
   score->add_option("--min-precision", min_precision, "Fail (exit 1) below this edge precision, 0-1");
   score->add_option("--min-recall", min_recall, "Fail (exit 1) below this edge recall, 0-1");
 
+  std::string disasm_path;
+  auto* disasm_cmd = app.add_subcommand("disasm", "Research aid: an ELF binary's functions and instructions, as JSON");
+  disasm_cmd->add_option("binary", disasm_path, "x86-64 ELF executable or shared library")->required();
+  disasm_cmd->add_option("-o,--out", out_path, "Output file (default: stdout)");
+
   std::string tree_path;
   auto* tree_cmd = app.add_subcommand("syntax-tree", "Developer aid: print a file's tree-sitter syntax tree");
   tree_cmd->add_option("file", tree_path, ".py, .js, .ts, .tsx, .c or .h file")->required();
@@ -248,6 +254,7 @@ int main(int argc, char** argv) {
       }
       return emit(g, view, out_path, indent);
     }
+    if (*disasm_cmd) return write_json(optum::disassemble_binary(disasm_path), out_path, -1);
     if (*tree_cmd) {
       std::cout << optum::syntax_tree(tree_path);
       return 0;

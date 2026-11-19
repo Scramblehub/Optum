@@ -245,6 +245,8 @@ if(Python3_FOUND AND GCC)
   add_test(NAME binary_merges_with_source
            COMMAND ${Python3_EXECUTABLE} ${TOOLS}/check_merge.py --optum $<TARGET_FILE:optum>
                    --source ${FIXTURES}/programs/c --binary ${CORPUS_DIR}/samples/O0/debug/multi --min-functions 9)
+  add_test(NAME cli_disasm COMMAND optum disasm ${CORPUS_DIR}/samples/O2/stripped/multi)
+  set_tests_properties(cli_disasm PROPERTIES PASS_REGULAR_EXPRESSION "\"to_function\"")
   # Binaries in a repo are untrusted input: mutated ones must never crash the frontend.
   add_test(NAME binary_fuzz
            COMMAND ${Python3_EXECUTABLE} ${TOOLS}/fuzz_elf.py --optum $<TARGET_FILE:optum> --cases 150
@@ -254,7 +256,7 @@ if(Python3_FOUND AND GCC)
                    --seed-binary ${CORPUS_DIR}/glue/O0/symbols/http_glue
                    --seed-binary ${CORPUS_DIR}/cJSON/O2/debug/libcjson.so)
   set_tests_properties(corpus_answer_keys corpus_symbols_baseline corpus_eh_frame_baseline
-                       binary_symbols_and_stripped binary_bare binary_debug binary_merges_with_source binary_fuzz PROPERTIES
+                       binary_symbols_and_stripped binary_bare binary_debug binary_merges_with_source binary_fuzz cli_disasm PROPERTIES
                        FIXTURES_REQUIRED corpus)
   set_tests_properties(binary_fuzz PROPERTIES TIMEOUT 900)
 endif()
