@@ -1,0 +1,40 @@
+{
+  "ir_version": "0.1.0",
+  "source": "tests/fixtures/programs/c/config",
+  "nodes": [
+    {"id": "c:config.h", "kind": "module", "name": "config.h", "frontend": "c"},
+    {"id": "c:main.c", "kind": "module", "name": "main.c", "frontend": "c"},
+    {"id": "c:util.c", "kind": "module", "name": "util.c", "frontend": "c"},
+    {"id": "c:main.c#check", "kind": "function", "name": "check", "frontend": "c"},
+    {"id": "c:main.c#main", "kind": "function", "name": "main", "frontend": "c"},
+    {"id": "c:util.c#fast_copy", "kind": "function", "name": "fast_copy", "frontend": "c"},
+    {"id": "c:util.c#log_line", "kind": "function", "name": "log_line", "frontend": "c"},
+    {"id": "c:util.c#buf_copy", "kind": "function", "name": "buf_copy", "frontend": "c"},
+    {"id": "c:util.c#trace", "kind": "function", "name": "trace", "frontend": "c"},
+    {"id": "c:util.c#sum1", "kind": "function", "name": "sum1", "frontend": "c"},
+    {"id": "c:util.c#sum2", "kind": "function", "name": "sum2", "frontend": "c"},
+    {"id": "c:util.c#checksum", "kind": "function", "name": "checksum", "frontend": "c"}
+  ],
+  "edges": [
+    {"from": "c:main.c", "to": "c:config.h", "kind": "imports"},
+    {"from": "c:util.c", "to": "c:config.h", "kind": "imports"},
+    {"from": "c:main.c", "to": "c:main.c#check", "kind": "defines"},
+    {"from": "c:main.c", "to": "c:main.c#main", "kind": "defines"},
+    {"from": "c:util.c", "to": "c:util.c#fast_copy", "kind": "defines"},
+    {"from": "c:util.c", "to": "c:util.c#log_line", "kind": "defines"},
+    {"from": "c:util.c", "to": "c:util.c#buf_copy", "kind": "defines"},
+    {"from": "c:util.c", "to": "c:util.c#trace", "kind": "defines"},
+    {"from": "c:util.c", "to": "c:util.c#sum1", "kind": "defines"},
+    {"from": "c:util.c", "to": "c:util.c#sum2", "kind": "defines"},
+    {"from": "c:util.c", "to": "c:util.c#checksum", "kind": "defines"},
+    {"from": "c:main.c#main", "to": "c:util.c#fast_copy", "kind": "calls"},
+    {"from": "c:main.c#main", "to": "c:util.c#log_line", "kind": "calls"},
+    {"from": "c:main.c#main", "to": "c:util.c#checksum", "kind": "calls"},
+    {"from": "c:util.c#checksum", "to": "c:util.c#sum1", "kind": "calls"},
+    {"from": "c:util.c#checksum", "to": "c:util.c#sum2", "kind": "calls"},
+    {"from": "c:main.c#main", "to": "c:util.c#buf_copy", "kind": "calls", "confidence": "inferred", "attrs": {"inactive": true}},
+    {"from": "c:main.c#main", "to": "c:util.c#trace", "kind": "calls", "confidence": "inferred", "attrs": {"inactive": true}},
+    {"from": "c:main.c#main", "to": "c:main.c#check", "kind": "calls", "confidence": "inferred", "attrs": {"inactive": true}},
+    {"from": "c:main.c#check", "to": "c:util.c#log_line", "kind": "calls", "confidence": "inferred", "attrs": {"inactive": true}}
+  ]
+}

@@ -1,21 +1,25 @@
 // C frontend. Rules: docs/frontends.md ("C").
 //
-// Pass 1 (parallel, per file): functions with their parameters and locals, includes, string
-// macros and constants, call sites, and every function name used other than as a callee (its
-// address is taken, so it may be called through a pointer). Pass 2 (parallel, per file): resolve
-// names the way the linker would, and turn libcurl / database calls into external and store nodes.
+// Pass 1 (parallel, per file): functions with their parameters and locals, includes, #defines,
+// string constants, call sites, the #if around each (pp_expr.hpp), and every function name used
+// other than as a callee (its address is taken, so it may be called through a pointer). Pass 2
+// (parallel, per file): resolve names the way the linker would, decide which #ifs are compiled
+// (Config), and turn libcurl / database calls into external and store nodes.
 
 #include "optum/frontends/c.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <map>
 #include <optional>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 
 #include "../../ts_util.hpp"
 #include "../common.hpp"
+#include "pp_expr.hpp"
 #include "optum/http.hpp"
 #include "optum/sql.hpp"
 
@@ -31,6 +35,14 @@ using frontends::read_file;
 using frontends::sql_store_node;
 using frontends::to_upper;
 
+// A #define: function-like (the names its body calls) or object-like (its replacement text).
+struct MacroDef {
+  bool function_like = false;
+  std::vector<std::string> calls;
+  std::string value;
+  int cond = -1;
+};
+
 // A string-ish value: literal pieces and holes (a name to resolve, or "" for unknown).
 struct Str {
   std::vector<std::pair<bool, std::string>> parts;
@@ -43,6 +55,7 @@ struct Arg {
 
 struct CallSite {
   int func = -1;
+  int cond = -1;  // index in ModuleInfo::pp.conds, -1 outside any #if
   std::string callee;  // direct call by name ("" for a call through a pointer)
   std::size_t nargs = 0;
   std::vector<Arg> args;
@@ -52,6 +65,7 @@ struct CallSite {
 
 struct Func {
   std::string name;
+  int cond = -1;
   bool is_static = false;
   int nparams = 0;  // -1: variadic
   std::uint32_t line = 1, end_line = 1;
@@ -76,8 +90,12 @@ struct ModuleInfo {
   std::unordered_map<std::string, Str> consts;  // file-scope string constants and string macros
   std::unordered_set<std::string> address_taken;
   std::unordered_set<std::string> prototypes;  // functions declared (not defined) here
-  // Function-like macros: the names called in their bodies (FLUSH_BLOCK(s, x) -> flush_pending).
-  std::unordered_map<std::string, std::vector<std::string>> macros;
+  // Every #define, in file order (FLUSH_BLOCK(s, x) -> flush_pending; zmemcpy -> memcpy).
+  std::unordered_map<std::string, std::vector<MacroDef>> defs;
+  std::unordered_map<std::string, std::vector<int>> undefs;  // #undef NAME: where
+  c_pp::Conditions pp;  // the #if structure; the `cond` fields above index pp.conds
+  // -DNAME[=value] (nullopt: -UNAME) from compile_commands.json, if it compiles this file.
+  std::unordered_map<std::string, std::optional<std::string>> flags;
 };
 
 // ===================================================================== pass 1
@@ -85,14 +103,17 @@ struct ModuleInfo {
 class Summarizer {
  public:
   Summarizer(ModuleInfo& m, std::string_view src) : m_(m), src_(src) {}
-  void run(TSNode root) { walk(root, -1); }
+  void run(TSNode root) {
+    m_.pp = c_pp::scan(src_);
+    walk(root, -1);
+  }
 
  private:
   ModuleInfo& m_;
   std::string_view src_;
   int depth_ = 0;  // recursion depth of walk()
   std::string text(TSNode n) const { return std::string(ts::text(n, src_)); }
-  std::vector<std::string> conditions_;  // enclosing #if / #ifdef conditions
+  int cond_at(TSNode n) const { return m_.pp.at(ts::line(n)); }
 
   // The identifier a declarator declares, through pointers, arrays, parentheses and functions.
   TSNode declared(TSNode d) const {
@@ -125,12 +146,13 @@ class Summarizer {
     const frontends::DepthGuard guard(depth_);
     if (guard.too_deep()) return;
     const std::string_view t = ts_node_type(n);
-    if (t == "function_definition") return on_function(n);
+    if (t == "function_definition") return on_function(n, f);
     if (t == "declaration") return on_declaration(n, f);
     if (t == "call_expression") return on_call(n, f);
     if (t == "preproc_include") return on_include(n);
     if (t == "preproc_def") return on_define(n);
     if (t == "preproc_function_def") return on_macro(n);
+    if (t == "preproc_call") return on_directive(n);
     if (t == "preproc_ifdef" || t == "preproc_if" || t == "preproc_elif" || t == "preproc_else" ||
         t == "preproc_elifdef") {
       return on_conditional(n, f);
@@ -146,7 +168,7 @@ class Summarizer {
     ts::for_named(n, [&](TSNode c) { walk(c, f); });
   }
 
-  void on_function(TSNode n) {
+  void on_function(TSNode n, int f) {
     const TSNode decl = ts::field(n, "declarator");
     const TSNode fd = function_declarator(decl);
     const TSNode id = declared(decl);
@@ -154,9 +176,15 @@ class Summarizer {
     static const std::unordered_set<std::string> kKeywords = {
         "if", "else", "while", "for", "do", "switch", "case", "return", "sizeof", "goto", "break", "continue",
         "default", "typedef", "struct", "union", "enum", "static", "extern", "const", "volatile"};
-    if (kKeywords.count(text(id))) return;  // error recovery on macro-heavy code, not a function
+    if (kKeywords.count(text(id))) {
+      // Error recovery, not a function: `#ifdef GZIP / else if (x) { crc32(...); } / #endif` in
+      // a function body reads as a function named `if`. Its body is still the enclosing function's.
+      if (f >= 0) walk(ts::field(n, "body"), f);
+      return;
+    }
     Func fn;
     fn.name = text(id);
+    fn.cond = cond_at(n);
     fn.is_static = has_static(n);
     fn.line = ts::line(n);
     fn.end_line = ts::end_line(n);
@@ -216,7 +244,8 @@ class Summarizer {
     CallSite cs;
     cs.func = f;
     cs.line = ts::line(n);
-    for (const auto& c : conditions_) cs.condition += (cs.condition.empty() ? "" : " && ") + c;
+    cs.cond = cond_at(n);
+    if (cs.cond >= 0) cs.condition = m_.pp.conds[std::size_t(cs.cond)].text;
     if (ts::is(fn, "identifier")) {
       const std::string name = text(fn);
       const bool local = f >= 0 && m_.funcs[std::size_t(f)].locals.count(name);
@@ -245,32 +274,22 @@ class Summarizer {
     if (f >= 0) m_.calls.push_back(std::move(cs));
   }
 
-  // #ifdef X / #ifndef X / #if expr: the body runs only under that condition. The #else / #elif
-  // that follows is a sibling inside it, and gets "not (...)" of the condition before it.
+  // #if / #ifdef / #elif / #else: their conditions come from the line scan (c_pp::scan), so
+  // only the bodies are walked here.
   void on_conditional(TSNode n, int f) {
-    std::string cond;
-    const std::string_view t = ts_node_type(n);
-    if (t == "preproc_ifdef" || t == "preproc_elifdef") {
-      const std::string head = std::string(ts::text(ts_node_child(n, 0), src_));
-      cond = (head.find("ndef") != std::string::npos ? "!" : "") + text(ts::field(n, "name"));
-    } else if (t == "preproc_if" || t == "preproc_elif") {
-      cond = text(ts::field(n, "condition"));
-    } else {
-      cond = "else";
-    }
-    std::erase_if(cond, [](char c) { return c == '\n' || c == '\r'; });
-    if (cond.size() > 80) cond = cond.substr(0, 77) + "...";
-    const bool branch = t == "preproc_elif" || t == "preproc_else" || t == "preproc_elifdef";
-    if (branch && !conditions_.empty()) conditions_.back() = "not (" + conditions_.back() + ")";
-    if (!branch) conditions_.push_back(cond);
-    else if (t != "preproc_else") conditions_.back() += " && " + cond;
     ts::for_named(n, [&](TSNode c) {
-      const std::string_view ct = ts_node_type(c);
       if (c.id == ts::field(n, "condition").id || c.id == ts::field(n, "name").id) return;
+      const std::string_view ct = ts_node_type(c);
       if (ct == "preproc_elif" || ct == "preproc_else" || ct == "preproc_elifdef") on_conditional(c, f);
       else walk(c, f);
     });
-    if (!branch) conditions_.pop_back();
+  }
+
+  void on_directive(TSNode n) {
+    if (ts::text(ts::field(n, "directive"), src_) != "#undef") return;
+    std::string name = text(ts::field(n, "argument"));
+    while (!name.empty() && std::isspace(static_cast<unsigned char>(name.back()))) name.pop_back();
+    if (!name.empty()) m_.undefs[name].push_back(cond_at(n));
   }
 
   void on_macro(TSNode n) {
@@ -293,7 +312,11 @@ class Summarizer {
         ++i;
       }
     }
-    m_.macros[text(ts::field(n, "name"))] = std::move(called);
+    MacroDef d;
+    d.function_like = true;
+    d.calls = std::move(called);
+    d.cond = cond_at(n);
+    m_.defs[text(ts::field(n, "name"))].push_back(std::move(d));
   }
 
   void on_include(TSNode n) {
@@ -309,6 +332,10 @@ class Summarizer {
     const std::string name = text(ts::field(n, "name"));
     std::string v = text(ts::field(n, "value"));
     while (!v.empty() && std::isspace(static_cast<unsigned char>(v.back()))) v.pop_back();
+    MacroDef d;
+    d.value = v;
+    d.cond = cond_at(n);
+    m_.defs[name].push_back(std::move(d));
     Str s;
     std::size_t i = 0;
     while (i < v.size()) {
@@ -427,6 +454,13 @@ class Project {
         if (!fn.is_static) globals_[fn.name].push_back({m, f});
       }
     }
+    for (const ModuleInfo& mod : mods) {
+      // A .c file's #defines reach only that file (unless it's included, and then it's visible).
+      if (!mod.path.ends_with(".c")) {
+        for (const auto& [name, d] : mod.defs) defined_in_header_.insert(name);
+      }
+      used_in_code_.insert(mod.address_taken.begin(), mod.address_taken.end());  // every name used as a value
+    }
     // Resolved includes, then each file's headers seen through includes of includes.
     includes_.resize(mods.size());
     for (int m = 0; m < static_cast<int>(mods.size()); ++m) {
@@ -519,13 +553,51 @@ class Project {
     return count == 1 ? with(same_dir) : FnRef{};
   }
 
-  // A function-like macro visible from module m (its own file, then included headers).
-  const std::vector<std::string>* macro(int m, const std::string& name) const {
-    if (auto it = mods[std::size_t(m)].macros.find(name); it != mods[std::size_t(m)].macros.end()) return &it->second;
+  // The #defines of `name` visible from module m: its own file, then included headers.
+  struct DefRef {
+    int mod;
+    const MacroDef* def;
+  };
+  std::vector<DefRef> defs(int m, const std::string& name) const {
+    std::vector<DefRef> out;
+    auto add = [&](int mod) {
+      const auto& d = mods[std::size_t(mod)].defs;
+      if (auto it = d.find(name); it != d.end()) {
+        for (const MacroDef& def : it->second) out.push_back({mod, &def});
+      }
+    };
+    add(m);
+    for (int h : visible_[std::size_t(m)]) add(h);
+    return out;
+  }
+  // Where `name` is #undef'd, visible from module m: (module, cond) pairs.
+  std::vector<std::pair<int, int>> undefs(int m, const std::string& name) const {
+    std::vector<std::pair<int, int>> out;
+    auto add = [&](int mod) {
+      const auto& u = mods[std::size_t(mod)].undefs;
+      if (auto it = u.find(name); it != u.end()) {
+        for (int c : it->second) out.emplace_back(mod, c);
+      }
+    };
+    add(m);
+    for (int h : visible_[std::size_t(m)]) add(h);
+    return out;
+  }
+  bool defined_in_header(const std::string& name) const { return defined_in_header_.count(name) > 0; }
+  bool used_in_code(const std::string& name) const { return used_in_code_.count(name) > 0; }
+  // Module m, or a header it sees, includes <header>.
+  bool sees_system_header(int m, const std::string& header) const {
+    auto has = [&](int mod) {
+      for (const Include& inc : mods[std::size_t(mod)].includes) {
+        if (inc.system && inc.spec == header) return true;
+      }
+      return false;
+    };
+    if (has(m)) return true;
     for (int h : visible_[std::size_t(m)]) {
-      if (auto it = mods[std::size_t(h)].macros.find(name); it != mods[std::size_t(h)].macros.end()) return &it->second;
+      if (has(h)) return true;
     }
-    return nullptr;
+    return false;
   }
 
   const std::vector<FnRef>& address_taken() const { return address_taken_; }
@@ -564,8 +636,205 @@ class Project {
  private:
   std::unordered_map<std::string, int> by_path_;
   std::unordered_map<std::string, std::vector<FnRef>> globals_;
+  std::unordered_set<std::string> defined_in_header_, used_in_code_;
   std::vector<std::vector<int>> includes_, visible_;
   std::vector<FnRef> address_taken_;
+};
+
+// The build configuration: the file's -D / -U flags from compile_commands.json (none without
+// one), GCC or Clang on Linux. Decides whether an #if branch is compiled, from those flags and the
+// project's own #defines that a translation unit can see:
+//   - a name the project #defines is defined when one of its visible #defines is in a compiled
+//     branch (while that is decided, the name itself counts as not yet defined, so
+//     `#ifndef X / #define X` defaults and include guards hold);
+//   - a name nobody in the project #defines, and that its code never uses as a value, is a
+//     build option left off (ZLIB_DEBUG, Z_SOLO). One the code uses (O_CLOEXEC) comes from a
+//     system header: unknown;
+//   - the compiler's own names: __STDC__, __GNUC__, __linux__... are defined; other platforms'
+//     and compilers' (_WIN32, _MSC_VER, __APPLE__...) are not; other reserved names (`_X`,
+//     `__x`) are unknown. limits.h / stdint.h / stdio.h constants are defined (value unknown)
+//     where that header is included.
+// Anything else it can't decide is unknown, and an unknown branch is treated as compiled.
+using c_pp::Tri;
+
+class Config {
+ public:
+  explicit Config(const Project& p) : p_(p) {}
+
+  // Whether `cond` of module `mod` (an index in its conds) is compiled in translation unit `ctx`.
+  Tri active(int ctx, int mod, int cond) {
+    if (cond < 0) return Tri::True;
+    const bool top = busy_.empty() && assumed_.empty();
+    const auto key = std::make_tuple(ctx, mod, cond);
+    if (top) {
+      if (auto it = memo_active_.find(key); it != memo_active_.end()) return it->second;
+      steps_ = 0;
+    }
+    Tri r = Tri::True;
+    const c_pp::Conditions& pp = p_.mods[std::size_t(mod)].pp;
+    for (int bi : pp.conds[std::size_t(cond)].branches) {
+      const Tri t = branch(ctx, pp.branches[std::size_t(bi)]);
+      if (t == Tri::False) {
+        r = Tri::False;
+        break;
+      }
+      if (t == Tri::Unknown) r = Tri::Unknown;
+    }
+    if (top) memo_active_[key] = r;
+    return r;
+  }
+
+ private:
+  const Project& p_;
+  std::vector<std::string> busy_;     // names whose #defines are being decided
+  std::vector<std::string> assumed_;  // names that count as undefined for now
+  std::map<std::tuple<int, int, int>, Tri> memo_active_;
+  std::map<std::pair<int, std::string>, Tri> memo_defined_;
+  int steps_ = 0;
+  static constexpr int kMaxSteps = 20000;  // per top-level question; past it, unknown
+
+  static bool has(const std::vector<std::string>& v, const std::string& s) {
+    return std::find(v.begin(), v.end(), s) != v.end();
+  }
+
+  c_pp::Env env(int ctx) {
+    return {[this, ctx](const std::string& n) { return defined(ctx, n); },
+            [this, ctx](const std::string& n) { return value(ctx, n); }};
+  }
+
+  Tri branch(int ctx, const c_pp::Branch& b) {
+    const std::size_t mark = assumed_.size();
+    assumed_.insert(assumed_.end(), b.self.begin(), b.self.end());
+    Tri r = Tri::True;
+    auto take = [&](Tri t) {
+      if (t == Tri::False) r = Tri::False;
+      else if (t == Tri::Unknown && r == Tri::True) r = Tri::Unknown;
+    };
+    for (const std::string& prior : b.prior) {
+      const Tri t = c_pp::holds(prior, env(ctx));
+      take(t == Tri::True ? Tri::False : t == Tri::False ? Tri::True : Tri::Unknown);
+    }
+    if (!b.expr.empty()) take(c_pp::holds(b.expr, env(ctx)));
+    assumed_.resize(mark);
+    return r;
+  }
+
+  // The compiler's and the platform's names: True, False, or nullopt if not one of them.
+  static std::optional<Tri> host(const std::string& n) {
+    static const std::unordered_set<std::string> kDefined = {
+        "__STDC__", "__STDC_VERSION__", "__STDC_HOSTED__", "__GNUC__", "__linux__", "__linux", "__gnu_linux__",
+        "__unix__", "__unix", "__ELF__", "__CHAR_BIT__", "__SIZEOF_INT__", "__SIZEOF_LONG__", "__SIZEOF_POINTER__"};
+    static const std::unordered_set<std::string> kUndefined = {
+        "__cplusplus", "_WIN32", "_WIN64", "__WIN32__", "_WIN32_WCE", "_WINDOWS", "__CYGWIN__", "__MINGW32__",
+        "__MINGW64__", "_MSC_VER", "__BORLANDC__", "__TURBOC__", "__WATCOMC__", "__SC__", "__SASC", "__MSDOS__",
+        "__DOS__", "__OS2__", "__EMX__", "__APPLE__", "__MACH__", "__MACTYPES__", "__OS400__", "__TOS_OS400__",
+        "__HOS_AIX__", "_AIX", "__MVS__", "__370__", "__VMS", "__BEOS__", "_BEOS_", "__HAIKU__", "__FreeBSD__",
+        "__NetBSD__", "__OpenBSD__", "__DragonFly__", "__sun", "__hpux", "__QNX__", "__SMALL__", "__MEDIUM__",
+        "__COMPACT__", "__LARGE__", "__HUGE__", "__FLAT__", "__386__", "__acorn", "__TARGET_LIB__", "__EMSCRIPTEN__",
+        "__STDC_NO_ATOMICS__", "__STDC_NO_THREADS__", "__STDC_NO_VLA__"};
+    if (kDefined.count(n)) return Tri::True;
+    if (kUndefined.count(n)) return Tri::False;
+    static const std::unordered_set<std::string> kPlatform = {"unix", "linux", "i386", "sun", "sparc", "mips"};
+    if ((n.size() >= 2 && n[0] == '_' && (n[1] == '_' || std::isupper(static_cast<unsigned char>(n[1])))) ||
+        kPlatform.count(n)) {
+      return Tri::Unknown;
+    }
+    return std::nullopt;
+  }
+
+  // Constants of the standard headers: defined wherever their header is included.
+  static const char* std_header(const std::string& n) {
+    static const std::unordered_map<std::string, const char*> k = {
+        {"CHAR_BIT", "limits.h"},  {"SCHAR_MIN", "limits.h"}, {"SCHAR_MAX", "limits.h"}, {"UCHAR_MAX", "limits.h"},
+        {"CHAR_MIN", "limits.h"},  {"CHAR_MAX", "limits.h"},  {"SHRT_MIN", "limits.h"},  {"SHRT_MAX", "limits.h"},
+        {"USHRT_MAX", "limits.h"}, {"INT_MIN", "limits.h"},   {"INT_MAX", "limits.h"},   {"UINT_MAX", "limits.h"},
+        {"LONG_MIN", "limits.h"},  {"LONG_MAX", "limits.h"},  {"ULONG_MAX", "limits.h"}, {"LLONG_MIN", "limits.h"},
+        {"LLONG_MAX", "limits.h"}, {"ULLONG_MAX", "limits.h"}, {"MB_LEN_MAX", "limits.h"},
+        {"SIZE_MAX", "stdint.h"},  {"INTPTR_MAX", "stdint.h"}, {"UINTPTR_MAX", "stdint.h"},
+        {"PTRDIFF_MAX", "stdint.h"}, {"INT32_MAX", "stdint.h"}, {"UINT32_MAX", "stdint.h"},
+        {"INT64_MAX", "stdint.h"}, {"UINT64_MAX", "stdint.h"}, {"EOF", "stdio.h"}, {"BUFSIZ", "stdio.h"},
+        {"SEEK_SET", "stdio.h"},   {"SEEK_CUR", "stdio.h"},   {"SEEK_END", "stdio.h"}, {"EXIT_SUCCESS", "stdlib.h"},
+        {"EXIT_FAILURE", "stdlib.h"}, {"RAND_MAX", "stdlib.h"}};
+    auto it = k.find(n);
+    return it == k.end() ? nullptr : it->second;
+  }
+
+  // -D / -U for this translation unit from compile_commands.json: nullptr if none.
+  const std::optional<std::string>* flag(int ctx, const std::string& n) const {
+    const auto& f = p_.mods[std::size_t(ctx)].flags;
+    auto it = f.find(n);
+    return it == f.end() ? nullptr : &it->second;
+  }
+
+  Tri defined(int ctx, const std::string& n) {
+    if (const auto* f = flag(ctx, n)) return *f ? Tri::True : Tri::False;
+    if (has(assumed_, n)) return Tri::False;
+    if (has(busy_, n) || ++steps_ > kMaxSteps) return Tri::Unknown;
+    const bool top = busy_.empty() && assumed_.empty();
+    if (top) {
+      if (auto it = memo_defined_.find({ctx, n}); it != memo_defined_.end()) return it->second;
+    }
+    const auto defs = p_.defs(ctx, n);
+    Tri r = Tri::False;
+    if (defs.empty()) {
+      if (const auto known = host(n)) r = *known;
+      else if (const char* h = std_header(n)) r = p_.sees_system_header(ctx, h) ? Tri::True : Tri::Unknown;
+      else if (p_.defined_in_header(n) || p_.used_in_code(n)) r = Tri::Unknown;  // in a header we don't see, or a system one
+    } else {
+      busy_.push_back(n);
+      assumed_.push_back(n);
+      bool undefined_later = false;
+      for (const auto& [mod, c] : p_.undefs(ctx, n)) undefined_later = undefined_later || active(ctx, mod, c) != Tri::False;
+      if (undefined_later) {
+        r = Tri::Unknown;  // the order of #define and #undef would matter
+      } else {
+        for (const auto& d : defs) {
+          const Tri t = active(ctx, d.mod, d.def->cond);
+          if (t == Tri::True) {
+            r = Tri::True;
+            break;
+          }
+          if (t == Tri::Unknown) r = Tri::Unknown;
+        }
+      }
+      busy_.pop_back();
+      assumed_.pop_back();
+    }
+    if (top && steps_ <= kMaxSteps) memo_defined_[{ctx, n}] = r;
+    return r;
+  }
+
+  std::optional<long long> value(int ctx, const std::string& n) {
+    if (n == "__STDC__" || n == "__STDC_HOSTED__") return 1;
+    if (n == "__STDC_VERSION__") return 201710L;
+    if (const auto* f = flag(ctx, n)) {
+      if (!*f) return 0;
+      if (has(busy_, n)) return std::nullopt;
+      busy_.push_back(n);
+      const auto v = c_pp::eval(**f, env(ctx));
+      busy_.pop_back();
+      return v;
+    }
+    const Tri d = defined(ctx, n);
+    if (d == Tri::False) return 0;
+    if (d == Tri::Unknown || has(busy_, n)) return std::nullopt;
+    // Defined: by the one #define in a compiled branch, if its value is a constant expression.
+    const MacroDef* only = nullptr;
+    busy_.push_back(n);
+    assumed_.push_back(n);
+    bool clear = true;
+    for (const auto& ref : p_.defs(ctx, n)) {
+      const Tri t = active(ctx, ref.mod, ref.def->cond);
+      if (t == Tri::False) continue;
+      if (t == Tri::Unknown || only || ref.def->function_like) clear = false;
+      only = ref.def;
+    }
+    assumed_.pop_back();
+    std::optional<long long> v;
+    if (clear && only) v = c_pp::eval(only->value, env(ctx));
+    busy_.pop_back();
+    return v;
+  }
 };
 
 struct EdgeOut {
@@ -590,7 +859,29 @@ class Linker {
     for (const Include& inc : mod_.includes) on_include(inc);
     for (const CallSite& cs : mod_.calls) on_call(cs);
     for (int f = 0; f < static_cast<int>(mod_.funcs.size()); ++f) curl_edges(f);
-    return std::move(out_);
+    return most_certain_calls(std::move(out_));
+  }
+
+  // One call edge per caller and callee, from its most certain call site: exact before inferred,
+  // compiled before not, outside any #if before inside. Otherwise the graph's merge would mix
+  // their attrs (an unconditional call shown with another call site's condition).
+  static std::vector<EdgeOut> most_certain_calls(std::vector<EdgeOut> in) {
+    auto rank = [](const EdgeOut& e) {
+      return std::make_tuple(e.confidence == Confidence::Exact ? 0 : 1, e.attrs.contains("inactive") ? 1 : 0,
+                             e.attrs.contains("condition") ? 1 : 0);
+    };
+    std::vector<EdgeOut> out;
+    std::unordered_map<std::string, std::size_t> at;
+    for (EdgeOut& e : in) {
+      if (e.kind != EdgeKind::Calls) {
+        out.push_back(std::move(e));
+        continue;
+      }
+      auto [it, fresh] = at.emplace(e.from + '\n' + e.to, out.size());
+      if (fresh) out.push_back(std::move(e));
+      else if (rank(e) < rank(out[it->second])) out[it->second] = std::move(e);
+    }
+    return out;
   }
 
  private:
@@ -598,6 +889,7 @@ class Linker {
   int m_;
   const ModuleInfo& mod_;
   std::vector<EdgeOut> out_;
+  Config cfg_{p_};
 
   void emit(std::string from, std::string to, EdgeKind kind, Confidence c, std::uint32_t line,
             nlohmann::json attrs = nlohmann::json::object(), std::optional<Node> node = std::nullopt) {
@@ -629,18 +921,87 @@ class Linker {
     return a;
   }
 
-  // Calls hidden in a function-like macro: FLUSH_BLOCK(s, 0) -> flush_pending(...).
-  void macro_calls(const CallSite& cs, const std::string& name, int depth, std::unordered_set<std::string>& seen) {
-    const auto* body = p_.macro(m_, name);
-    if (!body || depth > 4 || !seen.insert(name).second) return;
-    for (const std::string& callee : *body) {
-      const FnRef r = p_.resolve_call(m_, callee);
-      if (r.mod >= 0) {
-        emit(caller(cs), p_.id(r), EdgeKind::Calls, r.declared ? Confidence::Exact : Confidence::Inferred, cs.line,
-             attrs_for(cs, r.declared ? "macro" : "macro_name_only"));
-      }
-      else macro_calls(cs, callee, depth + 1, seen);
+  // Why a call may not happen in the default configuration: an #if that isn't compiled around the
+  // call, around the macro it came through, or around the called function's definition.
+  struct Off {
+    bool inactive = false;
+    std::string condition;  // the conditions beyond the call site's own
+  };
+
+  void exclude(Off& off, const std::string& cond) const {
+    off.inactive = true;
+    if (!cond.empty() && off.condition.find(cond) == std::string::npos) {
+      off.condition += (off.condition.empty() ? "" : " && ") + cond;
     }
+  }
+  void exclude(Off& off, int mod, int cond) const { exclude(off, p_.mods[std::size_t(mod)].pp.conds[std::size_t(cond)].text); }
+
+  // Returns false if the function's definition isn't compiled in the default configuration.
+  bool emit_call(const CallSite& cs, FnRef r, bool via_macro, Off off) {
+    const Func& f = p_.fn(r);
+    // A header's definition is compiled in the caller's translation unit, a .c file's in its own.
+    const int ctx = p_.mods[std::size_t(r.mod)].path.ends_with(".h") ? m_ : r.mod;
+    // `#if X / f() {...} / #else / f() {...}`: the same function twice, compiled if either is.
+    bool compiled = false;
+    for (const Func& other : p_.mods[std::size_t(r.mod)].funcs) {
+      if (!compiled && other.name == f.name) compiled = cfg_.active(ctx, r.mod, other.cond) != Tri::False;
+    }
+    if (!compiled) exclude(off, r.mod, f.cond);
+    const char* via = via_macro ? (r.declared ? "macro" : "macro_name_only") : (r.declared ? nullptr : "name_only");
+    nlohmann::json a = attrs_for(cs, via);
+    if (off.inactive) {
+      std::string c = cs.condition;
+      if (!off.condition.empty() && c.find(off.condition) == std::string::npos) {
+        c += (c.empty() ? "" : " && ") + off.condition;
+      }
+      if (!c.empty()) a["condition"] = c;
+      a["inactive"] = true;
+    }
+    emit(caller(cs), p_.id(r), EdgeKind::Calls, r.declared && !off.inactive ? Confidence::Exact : Confidence::Inferred,
+         cs.line, std::move(a));
+    return compiled;
+  }
+
+  // `#define NAME other_name` in a compiled branch: the name the compiler sees instead.
+  std::string renamed(const std::string& name) {
+    for (const auto& d : p_.defs(m_, name)) {
+      if (d.def->function_like) continue;
+      std::string v;
+      for (char c : d.def->value) {
+        if (c == '/') break;  // a comment after the name
+        if (!std::isspace(static_cast<unsigned char>(c))) v += c;
+      }
+      const bool ident = !v.empty() && !std::isdigit(static_cast<unsigned char>(v[0])) &&
+                         std::all_of(v.begin(), v.end(), [](char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_'; });
+      if (ident && v != name && cfg_.active(m_, d.mod, d.def->cond) == Tri::True) return v;
+    }
+    return {};
+  }
+
+  // A call by name: to the project function, through object-like macros that rename it, and
+  // through function-like macros (FLUSH_BLOCK(s, 0) -> flush_pending(...)).
+  void call_name(const CallSite& cs, const std::string& name, bool via_macro, const Off& off, int depth,
+                 std::vector<std::string>& stack) {
+    if (depth > 4 || std::find(stack.begin(), stack.end(), name) != stack.end()) return;
+    stack.push_back(name);
+    const FnRef r = p_.resolve_call(m_, name);
+    if (const std::string to = renamed(name); !to.empty()) {
+      if (r.mod >= 0) {  // only reached when the #define isn't there
+        Off o = off;
+        exclude(o, "!defined(" + name + ")");
+        emit_call(cs, r, via_macro, o);
+      }
+      call_name(cs, to, via_macro, off, depth + 1, stack);
+    } else if (r.mod < 0 || !emit_call(cs, r, via_macro, off)) {
+      // No function, or one that isn't compiled: a function-like macro of that name is what's called.
+      for (const auto& d : p_.defs(m_, name)) {
+        if (!d.def->function_like) continue;
+        Off o = off;
+        if (cfg_.active(m_, d.mod, d.def->cond) == Tri::False) exclude(o, d.mod, d.def->cond);
+        for (const std::string& callee : d.def->calls) call_name(cs, callee, true, o, depth + 1, stack);
+      }
+    }
+    stack.pop_back();
   }
 
   void on_call(const CallSite& cs) {
@@ -657,14 +1018,10 @@ class Linker {
       return;
     }
     if (try_sql(cs)) return;
-    const FnRef r = p_.resolve_call(m_, cs.callee);
-    if (r.mod >= 0) {
-      if (r.declared) emit(caller(cs), p_.id(r), EdgeKind::Calls, Confidence::Exact, cs.line, attrs_for(cs));
-      else emit(caller(cs), p_.id(r), EdgeKind::Calls, Confidence::Inferred, cs.line, attrs_for(cs, "name_only"));
-      return;
-    }
-    std::unordered_set<std::string> seen;
-    macro_calls(cs, cs.callee, 0, seen);
+    Off off;
+    if (cfg_.active(m_, m_, cs.cond) == Tri::False) off.inactive = true;
+    std::vector<std::string> stack;
+    call_name(cs, cs.callee, false, off, 0, stack);
   }
 
   bool try_sql(const CallSite& cs) {
@@ -725,6 +1082,91 @@ class Linker {
 
 }  // namespace
 
+namespace {
+
+using Flags = std::unordered_map<std::string, std::optional<std::string>>;
+
+// A shell command line split into words: quotes and backslashes as sh reads them.
+std::vector<std::string> split_command(const std::string& cmd) {
+  std::vector<std::string> out;
+  std::string word;
+  bool in_word = false;
+  char quote = 0;
+  for (std::size_t i = 0; i < cmd.size(); ++i) {
+    const char c = cmd[i];
+    if (quote) {
+      if (c == quote) quote = 0;
+      else if (c == '\\' && quote == '"' && i + 1 < cmd.size()) word += cmd[++i];
+      else word += c;
+    } else if (c == '"' || c == '\'') {
+      quote = c;
+      in_word = true;
+    } else if (c == '\\' && i + 1 < cmd.size()) {
+      word += cmd[++i];
+      in_word = true;
+    } else if (std::isspace(static_cast<unsigned char>(c))) {
+      if (in_word) out.push_back(std::move(word));
+      word.clear();
+      in_word = false;
+    } else {
+      word += c;
+      in_word = true;
+    }
+  }
+  if (in_word) out.push_back(std::move(word));
+  return out;
+}
+
+// compile_commands.json at the root or in build/: the -D and -U flags each file is compiled
+// with, by path relative to the root. Empty if there's none (the default configuration then).
+std::unordered_map<std::string, Flags> read_compile_flags(const fs::path& root) {
+  std::unordered_map<std::string, Flags> out;
+  for (const char* name : {"compile_commands.json", "build/compile_commands.json"}) {
+    std::error_code ec;
+    const fs::path db = root / name;
+    if (!fs::is_regular_file(db, ec)) continue;
+    const nlohmann::json j = nlohmann::json::parse(read_file(db), nullptr, false);
+    if (!j.is_array()) return out;
+    const fs::path base = fs::weakly_canonical(root, ec);
+    auto str = [](const nlohmann::json& e, const char* key) {
+      auto it = e.find(key);
+      return it != e.end() && it->is_string() ? it->get<std::string>() : std::string();
+    };
+    for (const nlohmann::json& e : j) {
+      if (!e.is_object()) continue;
+      fs::path file = str(e, "file");
+      if (file.empty()) continue;
+      if (file.is_relative()) file = fs::path(str(e, "directory")) / file;
+      const fs::path rel = fs::weakly_canonical(file, ec).lexically_relative(base);
+      if (ec || rel.empty() || *rel.begin() == "..") continue;
+      std::vector<std::string> args;
+      if (auto it = e.find("arguments"); it != e.end() && it->is_array()) {
+        for (const auto& a : *it) {
+          if (a.is_string()) args.push_back(a.get<std::string>());
+        }
+      } else {
+        args = split_command(str(e, "command"));
+      }
+      Flags& flags = out[rel.generic_string()];
+      for (std::size_t i = 0; i < args.size(); ++i) {
+        const bool def = args[i].starts_with("-D"), undef = args[i].starts_with("-U");
+        if (!def && !undef) continue;
+        std::string v = args[i].substr(2);
+        if (v.empty() && i + 1 < args.size()) v = args[++i];
+        const std::size_t eq = v.find('=');
+        const std::string macro = v.substr(0, eq);
+        if (macro.empty()) continue;
+        if (undef) flags[macro] = std::nullopt;
+        else flags[macro] = eq == std::string::npos ? "1" : v.substr(eq + 1);
+      }
+    }
+    return out;
+  }
+  return out;
+}
+
+}  // namespace
+
 Graph extract_c_files(const fs::path& root, const std::vector<fs::path>& rel_files, CStats* stats, unsigned threads) {
   std::vector<fs::path> files;
   for (const auto& f : rel_files) {
@@ -751,6 +1193,10 @@ Graph extract_c_files(const fs::path& root, const std::vector<fs::path>& rel_fil
     m.syntax_error = ts_node_has_error(rootn);
     Summarizer(m, src).run(rootn);
   });
+  auto flags = read_compile_flags(root);
+  for (ModuleInfo& m : project.mods) {
+    if (auto it = flags.find(m.path); it != flags.end()) m.flags = std::move(it->second);
+  }
   project.index();
 
   std::vector<std::vector<EdgeOut>> edges(project.mods.size());

@@ -19,6 +19,7 @@ add_library(optum_core
   src/frontends/python/python_frontend.cpp
   src/frontends/js/js_frontend.cpp
   src/frontends/c/c_frontend.cpp
+  src/frontends/c/pp_expr.cpp
   src/frontends/binary/binary_frontend.cpp
   src/elf.cpp
   src/dwarf.cpp
