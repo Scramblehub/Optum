@@ -1,0 +1,27 @@
+{
+  "ir_version": "0.1.0",
+  "source": "tests/fixtures/programs/js/http_glue",
+  "nodes": [
+    {"id": "js:sync.js", "kind": "module", "name": "sync.js", "frontend": "js"},
+    {"id": "js:axios", "kind": "module", "name": "axios", "frontend": "js", "attrs": {"third_party": true}},
+    {"id": "js:sync.js#fetchOrders", "kind": "function", "name": "fetchOrders", "frontend": "js"},
+    {"id": "js:sync.js#pushDeal", "kind": "function", "name": "pushDeal", "frontend": "js"},
+    {"id": "js:sync.js#closeDeal", "kind": "function", "name": "closeDeal", "frontend": "js"},
+    {"id": "js:sync.js#sync", "kind": "function", "name": "sync", "frontend": "js"},
+    {"id": "http:shop.example.com/api/orders", "kind": "external", "name": "orders", "frontend": "js"},
+    {"id": "http:crm.example.com/api/deals", "kind": "external", "name": "deals", "frontend": "js"},
+    {"id": "http:crm.example.com/api/deals/{}", "kind": "external", "name": "{}", "frontend": "js"}
+  ],
+  "edges": [
+    {"from": "js:sync.js", "to": "js:sync.js#fetchOrders", "kind": "defines"},
+    {"from": "js:sync.js", "to": "js:sync.js#pushDeal", "kind": "defines"},
+    {"from": "js:sync.js", "to": "js:sync.js#closeDeal", "kind": "defines"},
+    {"from": "js:sync.js", "to": "js:sync.js#sync", "kind": "defines"},
+    {"from": "js:sync.js", "to": "js:axios", "kind": "imports"},
+    {"from": "js:sync.js#sync", "to": "js:sync.js#fetchOrders", "kind": "calls"},
+    {"from": "js:sync.js#sync", "to": "js:sync.js#pushDeal", "kind": "calls"},
+    {"from": "js:sync.js#fetchOrders", "to": "http:shop.example.com/api/orders", "kind": "reads"},
+    {"from": "js:sync.js#pushDeal", "to": "http:crm.example.com/api/deals", "kind": "sends_to"},
+    {"from": "js:sync.js#closeDeal", "to": "http:crm.example.com/api/deals/{}", "kind": "sends_to"}
+  ]
+}

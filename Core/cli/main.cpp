@@ -11,6 +11,7 @@
 #include "optum/frontend.hpp"
 #include "optum/ir.hpp"
 #include "optum/score.hpp"
+#include "optum/syntax_tree.hpp"
 #include "optum/version.hpp"
 #include "optum/view.hpp"
 
@@ -130,6 +131,7 @@ std::vector<std::unique_ptr<optum::Frontend>> make_frontends(const std::vector<s
                                                             unsigned threads, int timeout_s) {
   std::vector<std::unique_ptr<optum::Frontend>> out;
   out.push_back(optum::make_python_frontend(threads));
+  out.push_back(optum::make_js_frontend(threads));
   for (const auto& cmd : adapters) {
     out.push_back(optum::make_external_frontend(cmd, std::chrono::seconds(timeout_s)));
   }
@@ -200,6 +202,10 @@ int main(int argc, char** argv) {
   score->add_option("--min-precision", min_precision, "Fail (exit 1) below this edge precision, 0-1");
   score->add_option("--min-recall", min_recall, "Fail (exit 1) below this edge recall, 0-1");
 
+  std::string tree_path;
+  auto* tree_cmd = app.add_subcommand("syntax-tree", "Developer aid: print a file's tree-sitter syntax tree");
+  tree_cmd->add_option("file", tree_path, ".py, .js, .ts or .tsx file")->required();
+
   CLI11_PARSE(app, argc, argv);
 
   try {
@@ -239,6 +245,10 @@ int main(int argc, char** argv) {
         std::cerr << "merged: " << g.nodes().size() << " nodes, " << g.edges().size() << " edges\n";
       }
       return emit(g, view, out_path, indent);
+    }
+    if (*tree_cmd) {
+      std::cout << optum::syntax_tree(tree_path);
+      return 0;
     }
     if (*frontends_cmd) {
       const auto frontends = make_frontends(adapters, 0, adapter_timeout);

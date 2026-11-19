@@ -34,6 +34,17 @@ add_library(tree_sitter_python STATIC ${TS_PY_DIR}/parser.c ${TS_PY_DIR}/scanner
 target_include_directories(tree_sitter_python PRIVATE ${TS_PY_DIR})
 set_target_properties(tree_sitter_python PROPERTIES C_STANDARD 11 POSITION_INDEPENDENT_CODE ON)
 
+set(TS_JS_DIR ${CMAKE_SOURCE_DIR}/External_Libraries/tree-sitter-javascript/src)
+add_library(tree_sitter_javascript STATIC ${TS_JS_DIR}/parser.c ${TS_JS_DIR}/scanner.c)
+target_include_directories(tree_sitter_javascript PRIVATE ${TS_JS_DIR})
+set(TS_TS_DIR ${CMAKE_SOURCE_DIR}/External_Libraries/tree-sitter-typescript)
+add_library(tree_sitter_typescript STATIC
+  ${TS_TS_DIR}/typescript/src/parser.c ${TS_TS_DIR}/typescript/src/scanner.c
+  ${TS_TS_DIR}/tsx/src/parser.c ${TS_TS_DIR}/tsx/src/scanner.c)
+target_include_directories(tree_sitter_typescript PRIVATE ${TS_TS_DIR}/typescript/src)
+set_target_properties(tree_sitter_javascript tree_sitter_typescript PROPERTIES
+  C_STANDARD 11 POSITION_INDEPENDENT_CODE ON)
+
 add_subdirectory(Core)
 
 if(OPTUM_BUILD_TESTS)

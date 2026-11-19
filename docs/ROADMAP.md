@@ -79,7 +79,7 @@ Each line is a branch. Size is a rough guess for part-time solo work.
 | `feat/frontend-python` | tree-sitter integration; modules, functions, classes, calls, imports, HTTP (`requests`, `httpx`) and SQL (`sqlite3`-style `execute`) | done: 100% precision / 95% recall on samples, 93.5% recall on the stdlib ([notes](notes/2026-11-18-python-frontend-eval.md)) |
 | `feat/export` | DOT, SVG (via Graphviz) and Mermaid; views: `--level module`, `--focus`, `--edges`, `--no-inferred` ([docs/diagrams.md](diagrams.md)) | done |
 | `feat/frontend-protocol` | Adapter protocol ([docs/protocol.md](protocol.md)): any program, any language; built-in Python frontend behind the same interface; first adapter: n8n workflows (Python); shared id rules so tools meet on one node | done |
-| `feat/frontend-js` | JS/TS via tree-sitter, through the protocol | 1 week |
+| `feat/frontend-js` | JS/TS via tree-sitter: ES modules and CommonJS, classes, `this`/`super`, TS annotations, `fetch`/`axios`, SQL | done: 100% precision / 97% recall on samples, 79% recall on npm from runtime profiles ([notes](notes/2026-11-18-js-frontend-eval.md)) |
 | `feat/trace-verify` | Run a fixture, record which functions actually call which (a Python tracer for Python, `-finstrument-functions` for C), compare with the static graph, report precision and recall. Ignore class-body frames: they look like calls but aren't | 1 week |
 | `feat/viewer` | A local web page: pan, zoom, filter by module or edge type, click through to source | 1 week |
 | `exp/frontend-binary` | ELF symbols and disassembly to a call graph for small C programs compiled with gcc; compare with the graph from the same C source | 1–2 weeks, a spike |
@@ -128,6 +128,9 @@ Picked up when they become the bottleneck, not before. Each is a small branch of
 - **Python frontend:** read type hints (`def f(source: Tokenizer)`); track return types of project
   functions (`x = make_client()`); decorator factories and dispatch tables (the "hard" edges);
   calls into third-party SDKs (`stripe.Charge.create()`) as `saas:` edges.
+- **JS/TS frontend:** types for destructured parameters (`({gen}: Ctx)`); object-literal methods
+  as nodes; `axios.create({ baseURL })` clients; `tsconfig.json` path aliases; a runtime recall
+  check for TypeScript.
 - **n8n adapter:** JavaScript in Code nodes; raw SQL in `executeQuery`; link `executeWorkflow` to
   the called workflow.
 - **Diagrams:** dark mode; draw package containment as nesting.

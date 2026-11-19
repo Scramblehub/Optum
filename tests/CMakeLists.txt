@@ -66,6 +66,27 @@ foreach(dir ${PY_PROGRAMS})
 endforeach()
 
 # Analysing a package directory directly names modules from the outermost package.
+# The JS/TS frontend against each sample program, same rules as Python. `dynamic` misses its
+# 3 hard edges by design (13/16).
+set(JS_MIN_RECALL_dynamic 0.81)
+file(GLOB JS_PROGRAMS LIST_DIRECTORIES true ${FIXTURES}/programs/js/*)
+foreach(dir ${JS_PROGRAMS})
+  if(NOT IS_DIRECTORY ${dir})
+    continue()
+  endif()
+  get_filename_component(name ${dir} NAME)
+  set(min_recall 1)
+  if(DEFINED JS_MIN_RECALL_${name})
+    set(min_recall ${JS_MIN_RECALL_${name}})
+  endif()
+  set(out ${CMAKE_CURRENT_BINARY_DIR}/produced_js_${name}.json)
+  add_test(NAME frontend_js_${name}
+           COMMAND sh -c "$<TARGET_FILE:optum> graph ${dir} -q -o ${out} && $<TARGET_FILE:optum> score ${dir}/expected.json ${out} --min-precision 1 --min-recall ${min_recall}")
+endforeach()
+
+add_test(NAME cli_syntax_tree COMMAND optum syntax-tree ${FIXTURES}/programs/js/classes/shapes.ts)
+set_tests_properties(cli_syntax_tree PROPERTIES PASS_REGULAR_EXPRESSION "\\(program .*class_declaration name: \\(type_identifier\\)")
+
 add_test(NAME frontend_python_package_root_naming
          COMMAND optum graph -q --indent -1 ${FIXTURES}/programs/python/imports/shop)
 set_tests_properties(frontend_python_package_root_naming PROPERTIES

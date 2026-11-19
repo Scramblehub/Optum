@@ -1,0 +1,28 @@
+{
+  "ir_version": "0.1.0",
+  "source": "tests/fixtures/programs/js/basic",
+  "nodes": [
+    {"id": "js:app.js", "kind": "module", "name": "app.js", "frontend": "js"},
+    {"id": "js:app.js#parse", "kind": "function", "name": "parse", "frontend": "js"},
+    {"id": "js:app.js#total", "kind": "function", "name": "total", "frontend": "js"},
+    {"id": "js:app.js#factorial", "kind": "function", "name": "factorial", "frontend": "js"},
+    {"id": "js:app.js#report", "kind": "function", "name": "report", "frontend": "js"},
+    {"id": "js:app.js#report.fmt", "kind": "function", "name": "fmt", "frontend": "js"},
+    {"id": "js:app.js#unused", "kind": "function", "name": "unused", "frontend": "js"}
+  ],
+  "edges": [
+    {"from": "js:app.js", "to": "js:app.js#parse", "kind": "defines"},
+    {"from": "js:app.js", "to": "js:app.js#total", "kind": "defines"},
+    {"from": "js:app.js", "to": "js:app.js#factorial", "kind": "defines"},
+    {"from": "js:app.js", "to": "js:app.js#report", "kind": "defines"},
+    {"from": "js:app.js", "to": "js:app.js#unused", "kind": "defines"},
+    {"from": "js:app.js#report", "to": "js:app.js#report.fmt", "kind": "defines"},
+    {"from": "js:app.js#report", "to": "js:app.js#parse", "kind": "calls"},
+    {"from": "js:app.js#report", "to": "js:app.js#report.fmt", "kind": "calls"},
+    {"from": "js:app.js#report", "to": "js:app.js#total", "kind": "calls"},
+    {"from": "js:app.js#report", "to": "js:app.js#factorial", "kind": "calls"},
+    {"from": "js:app.js#factorial", "to": "js:app.js#factorial", "kind": "calls"},
+    {"from": "js:app.js#unused", "to": "js:app.js#report", "kind": "calls"},
+    {"from": "js:app.js", "to": "js:app.js#report", "kind": "calls"}
+  ]
+}

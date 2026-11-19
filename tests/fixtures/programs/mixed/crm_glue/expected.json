@@ -21,7 +21,13 @@
     {"frontend": "n8n", "id": "n8n:wf-order-crm/Notify sales", "kind": "step", "name": "Notify sales"},
     {"frontend": "n8n", "id": "n8n:wf-order-crm/Note", "kind": "step", "name": "Note"},
     {"frontend": "n8n", "id": "sql:orders", "kind": "store", "name": "orders"},
-    {"frontend": "n8n", "id": "saas:slack", "kind": "external", "name": "slack"}
+    {"frontend": "n8n", "id": "saas:slack", "kind": "external", "name": "slack"},
+    {"frontend": "js", "id": "js:sync.js", "kind": "module", "name": "sync.js"},
+    {"attrs": {"third_party": true}, "frontend": "js", "id": "js:axios", "kind": "module", "name": "axios"},
+    {"frontend": "js", "id": "js:sync.js#fetchOrders", "kind": "function", "name": "fetchOrders"},
+    {"frontend": "js", "id": "js:sync.js#pushDeal", "kind": "function", "name": "pushDeal"},
+    {"frontend": "js", "id": "js:sync.js#closeDeal", "kind": "function", "name": "closeDeal"},
+    {"frontend": "js", "id": "js:sync.js#sync", "kind": "function", "name": "sync"}
   ],
   "edges": [
     {"from": "py:sync", "kind": "defines", "to": "py:sync.fetch_orders"},
@@ -52,6 +58,16 @@
     {"from": "n8n:wf-order-crm/Create deal", "kind": "sends_to", "to": "http:crm.example.com/api/deals"},
     {"from": "n8n:wf-order-crm/Mark deal won", "kind": "sends_to", "to": "http:crm.example.com/api/deals/{}"},
     {"from": "n8n:wf-order-crm/Log order", "kind": "writes", "to": "sql:orders"},
-    {"from": "n8n:wf-order-crm/Notify sales", "kind": "sends_to", "to": "saas:slack"}
+    {"from": "n8n:wf-order-crm/Notify sales", "kind": "sends_to", "to": "saas:slack"},
+    {"from": "js:sync.js", "kind": "defines", "to": "js:sync.js#fetchOrders"},
+    {"from": "js:sync.js", "kind": "defines", "to": "js:sync.js#pushDeal"},
+    {"from": "js:sync.js", "kind": "defines", "to": "js:sync.js#closeDeal"},
+    {"from": "js:sync.js", "kind": "defines", "to": "js:sync.js#sync"},
+    {"from": "js:sync.js", "kind": "imports", "to": "js:axios"},
+    {"from": "js:sync.js#sync", "kind": "calls", "to": "js:sync.js#fetchOrders"},
+    {"from": "js:sync.js#sync", "kind": "calls", "to": "js:sync.js#pushDeal"},
+    {"from": "js:sync.js#fetchOrders", "kind": "reads", "to": "http:shop.example.com/api/orders"},
+    {"from": "js:sync.js#pushDeal", "kind": "sends_to", "to": "http:crm.example.com/api/deals"},
+    {"from": "js:sync.js#closeDeal", "kind": "sends_to", "to": "http:crm.example.com/api/deals/{}"}
   ]
 }

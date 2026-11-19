@@ -1,0 +1,32 @@
+{
+  "ir_version": "0.1.0",
+  "source": "tests/fixtures/programs/js/dynamic",
+  "nodes": [
+    {"id": "js:plugins.js", "kind": "module", "name": "plugins.js", "frontend": "js"},
+    {"id": "js:plugins.js#Ops", "kind": "data_type", "name": "Ops", "frontend": "js"},
+    {"id": "js:plugins.js#doCharge", "kind": "function", "name": "doCharge", "frontend": "js"},
+    {"id": "js:plugins.js#apply", "kind": "function", "name": "apply", "frontend": "js"},
+    {"id": "js:plugins.js#Ops.double", "kind": "function", "name": "double", "frontend": "js"},
+    {"id": "js:plugins.js#Ops.run", "kind": "function", "name": "run", "frontend": "js"},
+    {"id": "js:plugins.js#each", "kind": "function", "name": "each", "frontend": "js"},
+    {"id": "js:plugins.js#main", "kind": "function", "name": "main", "frontend": "js"}
+  ],
+  "edges": [
+    {"from": "js:plugins.js", "to": "js:plugins.js#doCharge", "kind": "defines"},
+    {"from": "js:plugins.js", "to": "js:plugins.js#apply", "kind": "defines"},
+    {"from": "js:plugins.js", "to": "js:plugins.js#Ops", "kind": "defines"},
+    {"from": "js:plugins.js", "to": "js:plugins.js#each", "kind": "defines"},
+    {"from": "js:plugins.js", "to": "js:plugins.js#main", "kind": "defines"},
+    {"from": "js:plugins.js#Ops", "to": "js:plugins.js#Ops.double", "kind": "defines"},
+    {"from": "js:plugins.js#Ops", "to": "js:plugins.js#Ops.run", "kind": "defines"},
+    {"from": "js:plugins.js#apply", "to": "js:plugins.js#doCharge", "kind": "calls", "attrs": {"difficulty": "hard"}},
+    {"from": "js:plugins.js#Ops.run", "to": "js:plugins.js#Ops.double", "kind": "calls", "attrs": {"difficulty": "hard"}},
+    {"from": "js:plugins.js#each", "to": "js:plugins.js#doCharge", "kind": "calls", "attrs": {"difficulty": "hard"}},
+    {"from": "js:plugins.js", "to": "js:plugins.js#apply", "kind": "calls"},
+    {"from": "js:plugins.js", "to": "js:plugins.js#main", "kind": "calls"},
+    {"from": "js:plugins.js#main", "to": "js:plugins.js#apply", "kind": "calls"},
+    {"from": "js:plugins.js#main", "to": "js:plugins.js#Ops", "kind": "calls"},
+    {"from": "js:plugins.js#main", "to": "js:plugins.js#Ops.run", "kind": "calls"},
+    {"from": "js:plugins.js#main", "to": "js:plugins.js#each", "kind": "calls"}
+  ]
+}
