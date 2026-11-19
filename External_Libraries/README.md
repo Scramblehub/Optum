@@ -14,6 +14,15 @@ After cloning: `git submodule update --init --depth 1`.
 | [tree-sitter-typescript](https://github.com/tree-sitter/tree-sitter-typescript) | v0.23.2 | MIT | TypeScript and TSX grammars (ABI 14) |
 | [tree-sitter-c](https://github.com/tree-sitter/tree-sitter-c) | v0.24.2 | MIT | C grammar (ABI 15) |
 
+**Binary corpus sources** (`corpus/`): compiled by `tests/tools/build_corpus.py` into test binaries,
+never linked into Optum.
+
+| Project | Version | License | Used for |
+|---|---|---|---|
+| [zlib](https://github.com/madler/zlib) | v1.3.1 | Zlib | `libz.so`, `minigzip`, `example` |
+| [cJSON](https://github.com/DaveGamble/cJSON) | v1.7.18 | MIT | `libcjson.so`, `cjson_test` |
+| sqlite (optional, downloaded and SHA3-checked, not a submodule) | 3.54.1 | public domain | `libsqlite3.so`, local runs only |
+
 Planned: a SQL grammar, capstone (`exp/frontend-binary`).
 A grammar's ABI version must be one the runtime supports; check `LANGUAGE_VERSION` in its `src/parser.c`.
 

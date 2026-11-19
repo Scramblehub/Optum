@@ -80,10 +80,12 @@ shouldn't change. No new node or edge kinds are needed. This goes in decision 00
 
 Every stage is measured the way the frontends are: against an answer known in advance.
 
-- **A reference corpus we build ourselves:** our C samples plus a few small, permissively
-  licensed C projects (candidates: zlib, sqlite's single-file build, cJSON). Each is compiled at
-  `-O0 -O1 -O2 -O3 -Os`, with `-g`, then kept in three forms: debug info, symbols only, and stripped.
-  The build recipe is committed and the binaries are built by CMake, so only the recipe lives in git.
+- **A reference corpus we build ourselves** ([tests/corpus](../../tests/corpus/README.md)): our C
+  samples, zlib and cJSON (sqlite optionally, locally), each compiled at `-O0 -O1 -O2 -O3 -Os`
+  with `-g`, then kept in four forms: debug info, symbols only, stripped, and **bare** (stripped
+  and without `.eh_frame`). Only the recipe lives in git; the binaries are built in seconds.
+  Finding from stage 2: gcc's `.eh_frame` gives every function start even when stripped, so the
+  `bare` form is the real test of function discovery.
 - **The answer for each binary:** debug info and symbols say where every function starts and what
   it's called, and the C source frontend gives the call graph to score against.
 - **A large real-world check:** this machine's `libc.so.6` with its debug symbols (`libc6-dbg`),
@@ -100,8 +102,8 @@ are for part-time solo work.
 |---|---|---|---|---|
 | 0 | `docs/binary-plan` | This plan; decision 0005 (ids, scope, licences) | done | — |
 | 1 | `feat/frontend-c` | C source frontend on tree-sitter-c. The source side of every comparison, and useful by itself | done | Samples 100% / 100%; against GCC's own call graph: cJSON 100% / 100%, zlib 85% / 99% ([notes](../notes/2026-11-18-c-frontend-eval.md)) |
-| 2 | `feat/bin-corpus` | Corpus build recipe (CMake), ground-truth extraction, a scoring tool for function starts | 3–4 days | Corpus builds in CI |
-| 3 | `feat/bin-elf` | ELF reader (sections, `.symtab`, `.dynsym`, PLT/GOT, `.eh_frame`); capstone (submodule, BSD); function discovery from symbols, `.eh_frame` and call targets; direct call graph; imports become `lib:` nodes. ELF files are found by their magic bytes, not their extension | 1–2 weeks | Function starts: ≥ 99% precision and recall with symbols, ≥ 95% recall stripped. Call edges against the C source graph: ≥ 95% precision, ≥ 90% recall at `-O0`; reported per optimisation level |
+| 2 | `feat/bin-corpus` | Corpus build script, answer keys (functions with source ids, the compiler's call graph per level, imports), function-start scoring with baselines ([tests/corpus](../../tests/corpus/README.md)) | done | 35 binaries × 4 forms build in CI in seconds; answer keys checked against the symbol tables |
+| 3 | `feat/bin-elf` | ELF reader (sections, `.symtab`, `.dynsym`, PLT/GOT, `.eh_frame`); capstone (submodule, BSD); function discovery from symbols, `.eh_frame` and call targets; direct call graph; imports become `lib:` nodes. ELF files are found by their magic bytes, not their extension | 1–2 weeks | Function starts: 100% with symbols and stripped (`.eh_frame` already gives that); **on the `bare` form (no unwind tables) ≥ 90% recall at ≥ 95% precision**, from the code itself. Call edges against the C source graph: ≥ 95% precision, ≥ 90% recall at `-O0`; reported per optimisation level |
 | 4 | `feat/bin-lift` | Lift x86-64 basic blocks into a small typed expression IR (values, loads, stores, calls with their argument registers, constants). Constant strings reaching `curl_easy_setopt(CURLOPT_URL)`, `sqlite3_exec` or `PQexec` become `http:` and `sql:` nodes through the existing helpers | 2 weeks | A C version of the `http_glue` sample, built against libcurl, gives the same three `http:` nodes as the Python and JS versions |
 | 5 | `exp/bin-skeletons` | **CGL structure memory:** mine skeletons from the lifted IR across the corpus; index them; identify stripped functions by vote. Compare against two baselines: exact byte hashes (FLIRT-style) and control-flow shape | 2–3 weeks, time-boxed | A written result: top-1 identification on held-out programs, by optimisation level, against the baselines. Plus the 5b question: does memory from *other* programs beat the binary's own? |
 | 6 | `feat/bin-verify` | The fixed evaluator: run a function and its candidate on generated inputs in a sandboxed child (ptrace, SysV calling convention, pure functions only; any system call aborts the test). Passing raises `inferred` to `observed` | 1–2 weeks | Wrong identifications that pass verification: ≈ 0 on the corpus |
