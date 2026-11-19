@@ -44,6 +44,10 @@ Ids are the graph's node ids. Self-calls are ignored, and repeated pairs count o
 | Constructors | `Cls()` → the class actually called (read from the running `__init__`/`__new__`, so `Sub()` stays `Sub` when it inherits its constructor); `super().__init__()` → that `__init__` | a constructor frame → its class, unless the graph has an explicit `super(...)` call |
 | Ids | as the Python frontend names them, `@def` included | from the graph, by file and line |
 
+In JavaScript, a class without a constructor runs an implicit one: its frame counts as the class
+(`new Sub()`), and the base constructor it calls (an implicit `super(...)`, not in the source) is
+left out.
+
 Known limit: in Python, `init = super().__init__; init(...)` is recorded as a call to the class.
 
 ## Results so far
@@ -53,3 +57,6 @@ Known limit: in Python, `init = super().__init__; init(...)` is recorded as a ca
 | Python samples | | 100% | except `dynamic`: 50%, the 5 hard edges by design |
 | Python 3.12 standard library (`tests/tools/stdlib_workload.py`) | 533 | **86.9%** | v0.1 was 70.6% (73.4% on today's trace); see the [Python note](notes/2026-11-18-python-frontend-eval.md) |
 | npm (11 offline commands) | 105 | 79.0% | most misses: commands loaded by computed name |
+
+npm, since computed requires, return values and callbacks are followed: **98.1%** of 104 observed
+calls (the [JS note](notes/2026-11-18-js-frontend-eval.md)).

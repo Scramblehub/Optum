@@ -110,6 +110,9 @@ nearest named function, or the module.
 | `fetch(url, { method })`, `axios.get/post/...(url)`, `node-fetch` | `reads` (GET/HEAD/OPTIONS) or `sends_to` an `http:` node. URLs from literals, template strings and constants, also imported ones |
 | `.query / .execute / .raw / .prepare / .run / .all / .exec` with SQL text | `reads` / `writes` `sql:<table>` nodes, as for Python |
 | Getter and setter access (`npm.flatOptions`) | none: not a call in the source |
+| A function returning a module, class, function or instance (`static load(n) { return require(...) }`, factories) | calls through the result are followed; `confidence: inferred`, `attrs.via: "return_value"` |
+| `require(\`./commands/${name}.js\`)`: a relative path with holes | every project file the pattern matches (a hole matches a file name, not `/`; at most 200). Constructing or calling what it exports, and methods on those instances, give an edge to each; `inferred`, `attrs.via: "computed_require"` |
+| A project function passed to `map`, `filter`, `forEach`, `reduce`, `sort`, `find`, `some`, `every`, `flatMap`, `replace`, `Array.from`... | `calls` it from the caller (they run it synchronously); `inferred`, `attrs.via: "callback"`. Not `.then`: the callback runs later, from elsewhere |
 
 ## C
 

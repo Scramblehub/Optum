@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cctype>
 #include <optional>
+#include <regex>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -36,11 +37,12 @@ using frontends::to_upper;
 // ===================================================================== pass 1 data
 
 struct Expr {
-  enum class Kind : std::uint8_t { Other, Name, Member, Call, New, Str, This, Super, TypeRef, Require };
+  enum class Kind : std::uint8_t { Other, Name, Member, Call, New, Str, This, Super, TypeRef, Require, RequirePattern };
   Kind kind = Kind::Other;
   std::string text;       // Name: identifier. Member: property. Require: the module specifier.
   std::vector<Expr> sub;  // Member: {object}. Call: {function}. New: {constructor}. TypeRef: {type}.
-  std::vector<std::pair<bool, std::string>> parts;  // Str: literal pieces and holes (identifier or "")
+  // Str, RequirePattern: literal pieces and holes (identifier or "")
+  std::vector<std::pair<bool, std::string>> parts;
 };
 
 enum class DefKind : std::uint8_t { Module, Class, Function };
@@ -66,6 +68,7 @@ struct Def {
   std::unordered_map<std::string, Expr> values;  // last simple value, or a TypeRef from an annotation
   // Classes: values (or TypeRefs) of this.<attr>, with the scope to resolve them in.
   std::unordered_map<std::string, std::vector<std::pair<int, Expr>>> attr_values;
+  std::vector<Expr> returns;  // functions: returned expressions that name something (first few)
 };
 
 struct Export {
@@ -87,6 +90,7 @@ struct CallSite {
   bool is_new = false;
   std::optional<Expr> first_arg;
   std::string method_option;  // fetch(url, { method: "POST" })
+  std::vector<Expr> callbacks;  // arguments naming a function (a name or member), for callbacks
   std::uint32_t line = 0;
 };
 
@@ -145,6 +149,11 @@ class Summarizer {
     if (t == "import_statement") return on_import(n);
     if (t == "export_statement") return on_export(n, s, a);
     if (t == "assignment_expression") return on_assignment(n, s, a);
+    if (t == "return_statement" && def(s).kind == DefKind::Function && def(s).returns.size() < 4 &&
+        ts_node_named_child_count(n) == 1) {
+      Expr r = to_expr(ts_node_named_child(n, 0));
+      if (r.kind != Expr::Kind::Other && r.kind != Expr::Kind::Str) def(s).returns.push_back(std::move(r));
+    }
     if (t == "call_expression") on_call(n, s, a, false);
     else if (t == "new_expression") on_call(n, s, a, true);
     else if (t == "for_in_statement") bind_names(ts::field(n, "left"), s, nullptr);
@@ -547,6 +556,7 @@ class Summarizer {
       ts::for_named(args, [&](TSNode arg) {
         if (ts::is(arg, "comment")) return;
         if (i == 0) cs.first_arg = to_expr(arg);
+        if (ts::is(arg, "identifier") || ts::is(arg, "member_expression")) cs.callbacks.push_back(to_expr(arg));
         if (i == 1 && ts::is(arg, "object")) {
           ts::for_named(arg, [&](TSNode p) {
             if (ts::is(p, "pair") && unquote(text(ts::field(p, "key"))) == "method") {
@@ -610,6 +620,16 @@ class Summarizer {
           e.text = *spec;
           return e;
         }
+        // require(`./commands/${name}.js`): any project file the pattern matches.
+        const TSNode args = ts::field(n, "arguments");
+        if (!ts_node_is_null(args) && ts_node_named_child_count(args) == 1) {
+          Expr arg = to_expr(ts_node_named_child(args, 0));
+          if (arg.kind == Expr::Kind::Str && !arg.parts.empty() && !arg.parts.front().first &&
+              (arg.parts.front().second.starts_with("./") || arg.parts.front().second.starts_with("../"))) {
+            arg.kind = Expr::Kind::RequirePattern;
+            return arg;
+          }
+        }
       }
       e.kind = Expr::Kind::Call;
       e.sub.push_back(to_expr(ts::field(n, "function")));
@@ -666,6 +686,11 @@ struct Value {
   Kind kind = Kind::Unknown;
   DefRef ref;
   std::string path;  // ThirdParty: package and member path; "()" marks a call result
+  // Not certain: found through a function's return value or a computed require. Alternatives:
+  // every module a computed require can load (Module), every class or function they export
+  // (Def), or instances of those classes (Instance). `ref` is the first of them.
+  bool guess = false;
+  std::vector<DefRef> alts;
 };
 
 struct NameHit {
@@ -834,10 +859,10 @@ class Project {
         return {};
       }
       case Expr::Kind::This:
-        if (auto cls = this_class(m, scope)) return {Value::Kind::This, *cls, {}};
+        if (auto cls = this_class(m, scope)) return {Value::Kind::This, *cls, {}, false, {}};
         return {};
       case Expr::Kind::Super:
-        if (auto cls = this_class(m, scope)) return {Value::Kind::Super, *cls, {}};
+        if (auto cls = this_class(m, scope)) return {Value::Kind::Super, *cls, {}, false, {}};
         return {};
       case Expr::Kind::Member:
         return member_of(resolve_expr(m, scope, e.sub[0], depth + 1), e.text, depth);
@@ -846,20 +871,40 @@ class Project {
         if (t.mod >= 0) return module_value(t.mod);
         return t.third_party.empty() ? Value{} : third_party(t.third_party);
       }
+      case Expr::Kind::RequirePattern:
+        return pattern_modules(m, e);
       case Expr::Kind::New: {
         const Value c = callable(resolve_expr(m, scope, e.sub[0], depth + 1), depth);
-        if (c.kind == Value::Kind::Def && def(c.ref).kind == DefKind::Class) return {Value::Kind::Instance, c.ref, {}};
+        if (c.kind == Value::Kind::Def && def(c.ref).kind == DefKind::Class) {
+          Value v{Value::Kind::Instance, c.ref, {}, c.guess, {}};
+          for (const DefRef& r : c.alts) {
+            if (def(r).kind == DefKind::Class) v.alts.push_back(r);
+          }
+          return v;
+        }
         if (c.kind == Value::Kind::ThirdParty) return third_party(c.path + "()");
         return {};
       }
       case Expr::Kind::Call: {
         const Value f = callable(resolve_expr(m, scope, e.sub[0], depth + 1), depth);
         if (f.kind == Value::Kind::ThirdParty) return third_party(f.path + "()");
+        // A project function: what it returns, if a return statement names a module, a class, a
+        // function or an instance (factories, `static cmd(c) { return require(...) }`).
+        if (f.kind == Value::Kind::Def && def(f.ref).kind == DefKind::Function && f.alts.empty()) {
+          for (const Expr& r : def(f.ref).returns) {
+            Value v = resolve_expr(f.ref.mod, f.ref.def, r, depth + 2);
+            if (v.kind == Value::Kind::This) continue;  // `return this`: the receiver, unknown here
+            if (v.kind == Value::Kind::Module || v.kind == Value::Kind::Def || v.kind == Value::Kind::Instance) {
+              v.guess = true;
+              return v;
+            }
+          }
+        }
         return {};
       }
       case Expr::Kind::TypeRef: {
         const Value t = resolve_expr(m, scope, e.sub[0], depth + 1);
-        if (t.kind == Value::Kind::Def && def(t.ref).kind == DefKind::Class) return {Value::Kind::Declared, t.ref, {}};
+        if (t.kind == Value::Kind::Def && def(t.ref).kind == DefKind::Class) return {Value::Kind::Declared, t.ref, {}, false, {}};
         return {};
       }
       default:
@@ -869,7 +914,48 @@ class Project {
 
   // Calling or constructing a module means its default export (module.exports = X).
   Value callable(Value v, int depth = 0) const {
-    if (v.kind == Value::Kind::Module) return resolve_export(v.ref.mod, "default", depth + 1);
+    if (v.kind != Value::Kind::Module) return v;
+    if (v.alts.empty()) {
+      Value d = resolve_export(v.ref.mod, "default", depth + 1);
+      d.guess = d.guess || v.guess;
+      return d;
+    }
+    Value out;
+    for (const DefRef& alt : v.alts) {
+      const Value d = resolve_export(alt.mod, "default", depth + 1);
+      if (d.kind != Value::Kind::Def) continue;
+      if (out.kind == Value::Kind::Unknown) out = {Value::Kind::Def, d.ref, {}, true, {}};
+      out.alts.push_back(d.ref);
+    }
+    return out;
+  }
+
+  // The project files a computed require can load: its literal pieces, with any file name (no
+  // '/') in each hole. At most 200; none if the pattern is too loose to be useful.
+  Value pattern_modules(int m, const Expr& e) const {
+    std::string spec;
+    for (const auto& [hole, piece] : e.parts) spec += hole ? std::string("\x01") : piece;
+    const fs::path dir = fs::path(mods[std::size_t(m)].path).parent_path();
+    const std::string full = (dir / spec).lexically_normal().generic_string();
+    std::string re;
+    for (char c : full) {
+      if (c == '\x01') re += "[^/]+";
+      else if (std::isalnum(static_cast<unsigned char>(c)) || c == '/' || c == '_' || c == '-') re += c;
+      else re += std::string("\\") + c;
+    }
+    re += R"((\.[mc]?[jt]sx?|/index\.[mc]?[jt]sx?)?)";
+    const std::regex pattern(re);
+    Value v;
+    for (const auto& [path, i] : by_path_) {
+      if (i == m || !std::regex_match(path, pattern)) continue;
+      v.alts.push_back({i, 0});
+      if (v.alts.size() > 200) return {};
+    }
+    if (v.alts.empty()) return {};
+    std::sort(v.alts.begin(), v.alts.end(), [](const DefRef& a, const DefRef& b) { return a.mod < b.mod; });
+    v.kind = Value::Kind::Module;
+    v.ref = v.alts.front();
+    v.guess = true;
     return v;
   }
 
@@ -991,9 +1077,9 @@ class Project {
   std::unordered_map<DefRef, std::vector<DefRef>, DefRefHash> subclasses_;
   std::unordered_map<std::string, std::vector<DefRef>> methods_by_name_;
 
-  static Value module_value(int i) { return {Value::Kind::Module, {i, 0}, {}}; }
-  static Value def_value(DefRef r) { return {Value::Kind::Def, r, {}}; }
-  static Value third_party(std::string path) { return {Value::Kind::ThirdParty, {}, std::move(path)}; }
+  static Value module_value(int i) { return {Value::Kind::Module, {i, 0}, {}, false, {}}; }
+  static Value def_value(DefRef r) { return {Value::Kind::Def, r, {}, false, {}}; }
+  static Value third_party(std::string path) { return {Value::Kind::ThirdParty, {}, std::move(path), false, {}}; }
 
   // Node / bundler resolution: the path itself, with an extension, or its index file. A ".js"
   // import may name a ".ts" source (TypeScript's ESM convention).
@@ -1105,8 +1191,15 @@ class Linker {
         return;
       }
       case Value::Kind::Instance:
+        if (!obj.alts.empty()) {  // one of several classes (a computed require)
+          for (const DefRef& cls : obj.alts) {
+            if (auto mth = p_.lookup_method(cls, name)) call_edge(cs, *mth, Confidence::Inferred, "computed_require");
+          }
+          return;
+        }
         if (auto mth = p_.lookup_method(obj.ref, name)) {
-          if (cs.callee.sub[0].kind == Expr::Kind::New) call_edge(cs, *mth, Confidence::Exact);
+          if (obj.guess) call_edge(cs, *mth, Confidence::Inferred, "return_value");
+          else if (cs.callee.sub[0].kind == Expr::Kind::New) call_edge(cs, *mth, Confidence::Exact);
           else call_edge(cs, *mth, Confidence::Inferred, "local_type");
         }
         return;
@@ -1126,11 +1219,41 @@ class Linker {
     }
   }
 
+  // Sync methods that call a function they're given from the caller: xs.sort(byName),
+  // xs.map(toRow)... An edge to each project function passed, inferred. (Promise .then runs the
+  // callback later, from elsewhere, and isn't one of them.)
+  void callbacks(const CallSite& cs) {
+    static const std::unordered_set<std::string_view> takers = {
+        "map", "filter", "forEach", "reduce", "reduceRight", "sort", "toSorted", "find", "findIndex", "findLast",
+        "findLastIndex", "some", "every", "flatMap", "replace", "replaceAll", "from"};
+    if (cs.callbacks.empty() || cs.callee.kind != Expr::Kind::Member || !takers.count(cs.callee.text)) return;
+    for (const Expr& a : cs.callbacks) {
+      const Value v = p_.resolve_expr(m_, cs.scope, a, 0);
+      if (v.kind == Value::Kind::Def && p_.def(v.ref).kind == DefKind::Function) {
+        call_edge(cs, v.ref, Confidence::Inferred, "callback");
+      }
+    }
+  }
+
+  // Edges to a callee that may be one of several (a computed require), or came through a
+  // function's return value.
+  void guessed_edges(const CallSite& cs, const Value& v) {
+    if (!v.alts.empty()) {
+      for (const DefRef& r : v.alts) call_edge(cs, r, Confidence::Inferred, "computed_require");
+    } else {
+      call_edge(cs, v.ref, Confidence::Inferred, "return_value");
+    }
+  }
+
   void on_call(const CallSite& cs) {
     const Expr& callee = cs.callee;
+    callbacks(cs);
     if (cs.is_new) {
       const Value v = p_.callable(p_.resolve_expr(m_, cs.scope, callee, 0));
-      if (v.kind == Value::Kind::Def) call_edge(cs, v.ref, Confidence::Exact);
+      if (v.kind == Value::Kind::Def) {
+        if (v.guess) guessed_edges(cs, v);
+        else call_edge(cs, v.ref, Confidence::Exact);
+      }
       return;
     }
     if (callee.kind == Expr::Kind::Member && try_sql(cs)) return;
@@ -1150,8 +1273,12 @@ class Linker {
       if (hit.kind == NameHit::Kind::None && callee.text == "fetch") return http_edge(cs, "GET", true);
     }
     const Value v = p_.callable(p_.resolve_expr(m_, cs.scope, callee, 0));
-    if (v.kind == Value::Kind::Def) call_edge(cs, v.ref, Confidence::Exact);
-    else if (v.kind == Value::Kind::ThirdParty) try_http(cs, v.path);
+    if (v.kind == Value::Kind::Def) {
+      if (v.guess) guessed_edges(cs, v);
+      else call_edge(cs, v.ref, Confidence::Exact);
+    } else if (v.kind == Value::Kind::ThirdParty) {
+      try_http(cs, v.path);
+    }
   }
 
   bool try_sql(const CallSite& cs) {
