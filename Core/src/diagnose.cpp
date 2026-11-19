@@ -1,8 +1,10 @@
 #include "optum/diagnose.hpp"
 
+#include "optum/clones.hpp"
 #include "test_code.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <tuple>
 #include <map>
 #include <set>
@@ -131,7 +133,7 @@ void unused_code(const Graph& g, const std::vector<NodeIndex>& unit, std::vector
 
 }  // namespace
 
-Diagnosis diagnose(const Graph& g) {
+Diagnosis diagnose(const Graph& g, const std::filesystem::path& source_root) {
   Diagnosis d;
   d.source = g.source;
   const auto unit = units_of(g);
@@ -263,11 +265,44 @@ Diagnosis diagnose(const Graph& g) {
   }
   unused_code(g, unit, d.findings);
 
+  // Duplicated logic: clone groups found from the source (docs/diagnose.md).
+  std::error_code ec;
+  if (!source_root.empty() && std::filesystem::exists(source_root, ec)) {
+    for (const CloneGroup& cg : find_clones(g, source_root)) {
+      Finding f;
+      f.kind = "duplicated_logic";
+      std::set<std::string> comps;
+      nlohmann::json members = nlohmann::json::array();
+      std::uint32_t total = 0, most = 0;
+      for (const CloneMember& m : cg.members) {
+        f.targets.push_back(m.id);
+        if (auto i = g.find(m.id)) comps.insert(component_of(g.node(unit[*i])));
+        members.push_back({{"id", m.id}, {"file", m.file}, {"line", m.line}, {"lines", m.lines}, {"tokens", m.tokens}});
+        total += m.lines;
+        most = std::max(most, m.lines);
+      }
+      f.units.assign(comps.begin(), comps.end());
+      f.confidence = cg.type == "similar" ? "likely" : "certain";
+      const std::string how = cg.type == "exact"     ? "exact copies"
+                              : cg.type == "renamed" ? "copies with renamed names or values"
+                                                     : "near copies";
+      f.title = std::to_string(cg.members.size()) + " functions are " + how + " (" + std::to_string(total - most) +
+                " lines to remove by keeping one)";
+      f.evidence = {{"clone_type", cg.type}, {"similarity", std::round(cg.similarity * 100) / 100},
+                    {"members", members}, {"lines_saved", total - most}};
+      d.findings.push_back(std::move(f));
+    }
+  }
+
   // Surest first (docs/plans/phase2.md), then strongest: more units, then more targets.
   auto rank = [](const std::string& c) { return c == "certain" ? 2 : c == "likely" ? 1 : 0; };
+  // Duplicated logic weighs by the lines merging would save.
+  auto weight = [](const Finding& f) {
+    return f.kind == "duplicated_logic" ? f.evidence.value("lines_saved", 0u) : static_cast<unsigned>(f.targets.size());
+  };
   std::stable_sort(d.findings.begin(), d.findings.end(), [&](const Finding& a, const Finding& b) {
-    return std::make_tuple(rank(a.confidence), a.units.size(), a.targets.size()) >
-           std::make_tuple(rank(b.confidence), b.units.size(), b.targets.size());
+    return std::make_tuple(rank(a.confidence), a.units.size(), weight(a)) >
+           std::make_tuple(rank(b.confidence), b.units.size(), weight(b));
   });
 
   for (auto& [id, u] : units) d.units.push_back(std::move(u));
@@ -327,6 +362,17 @@ std::string to_markdown(const Diagnosis& d) {
         o += "| `" + dj["id"].get<std::string>() + "` | " + dj["kind"].get<std::string>() + " | " +
              dj["file"].get<std::string>() + ":" + std::to_string(dj["line"].get<std::uint32_t>()) + " | " +
              std::to_string(dj["lines"].get<std::uint32_t>()) + " |\n";
+      }
+      o += "\n";
+      continue;
+    }
+    if (f.kind == "duplicated_logic") {
+      o += "Kind: duplicated logic (" + f.evidence["clone_type"].get<std::string>() + ", similarity " +
+           std::to_string(static_cast<int>(std::lround(f.evidence["similarity"].get<double>() * 100))) +
+           "%). Confidence: **" + f.confidence + "**.\n\n| Function | Where | Lines |\n|---|---|---|\n";
+      for (const auto& mj : f.evidence["members"]) {
+        o += "| `" + mj["id"].get<std::string>() + "` | " + mj["file"].get<std::string>() + ":" +
+             std::to_string(mj["line"].get<std::uint32_t>()) + " | " + std::to_string(mj["lines"].get<std::uint32_t>()) + " |\n";
       }
       o += "\n";
       continue;

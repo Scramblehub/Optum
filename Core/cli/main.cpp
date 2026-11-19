@@ -414,7 +414,10 @@ int main(int argc, char** argv) {
       }
       const optum::Graph g = diag_graph.empty() ? build_graph(diag_path, adapters, threads, adapter_timeout, quiet)
                                                 : load(diag_graph);
-      const optum::Diagnosis d = optum::diagnose(g);
+      // The source, for analyses that read it (duplicated logic): the directory, or where a
+      // saved graph says it came from.
+      const std::string source_root = diag_graph.empty() ? diag_path : g.source;
+      const optum::Diagnosis d = optum::diagnose(g, source_root);
       if (diag_format == "json") return write_json(optum::to_json(d), out_path, indent);
       return write_text(optum::to_markdown(d), out_path);
     }

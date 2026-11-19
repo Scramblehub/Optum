@@ -19,8 +19,8 @@ optum diagnose . -f json -o diagnosis.json                   # for an agent or a
   This is the inventory, even when there are no findings.
 - **Third-party packages and libraries** the code imports.
 
-Findings so far: **overlapping glue**, **unused code** and **code only tests use**. Duplicated
-logic and the same data defined in several places come next ([plan](plans/phase2.md)).
+Findings so far: **overlapping glue**, **unused code**, **code only tests use** and **duplicated
+logic**. The same data defined in several places comes next ([plan](plans/phase2.md)).
 
 ## Overlapping glue
 
@@ -91,6 +91,37 @@ A function or class is reported when all of these hold:
 
 One finding per component, listing the definitions with their sizes. Confidence: `likely`.
 
+## Duplicated logic
+
+Functions that are copies of each other, found with CGL's structure memory applied to source code
+(the level where [the binary study](notes/2026-11-18-bin-skeletons-r3.md) said its skeletons belong). It needs the
+source: `optum diagnose <dir>`, or `--graph` when the graph's `source` path still exists.
+
+For every Python, JS and C function, Optum reads its body and computes:
+
+| | What | Finds |
+|---|---|---|
+| Exact hash | the body's tokens, comments and the function's name aside (and a Python docstring) | **exact** copies |
+| Shape hash | the same, with names as a typed hole `ID` and literals as `LIT` | copies with **renamed** names or values |
+| Structure memory | the shape of every piece of the body (subtrees of 4 to 40 syntax nodes), counted across the codebase and weighted by rarity (`log(1 + functions / functions with it)`) | **near** copies with small edits |
+
+Two functions are near copies when the weighted overlap of their pieces is at least **0.70** (the
+usual line for near-miss clones). Common idioms (`for x in xs: ...append`) are in many functions,
+so they weigh little; that's what keeps look-alikes apart (they score under 0.10 in the sample).
+
+Precision rules:
+- **Big enough:** 50+ tokens, 5+ lines, and 10+ distinct pieces. A run of `self.x = x` is one
+  piece repeated: boilerplate, not logic.
+- **Candidates** are pairs sharing 3+ rare pieces (in 2 to 20 functions); sizes within 60%.
+- **Every member is similar to every other** (complete link), so loosely similar functions can't
+  chain into one group. At most 50 members.
+- A function is never a clone of a function nested in it, and a group whose members all sit inside
+  members of another group is left out (it repeats that group). Test code is left out.
+
+One finding per group. Confidence: `certain` for exact and renamed copies, `likely` for near
+copies. Evidence: the clone type, the lowest similarity between two members, each member's
+location and size, and `lines_saved`: the lines removed by keeping one.
+
 ## How it's checked
 
 Each sample has an answer key with planted findings, `expected_diagnosis.json`, which
@@ -102,6 +133,7 @@ targets). Any missing or extra finding fails the test.
 | [mixed/crm_glue](../tests/fixtures/programs/mixed/crm_glue) | 1 finding: Python, JS, C and an n8n workflow syncing shop orders into a CRM |
 | [mixed/shared_table](../tests/fixtures/programs/mixed/shared_table) | 1 finding: a Python report and a JS signup both on `customers` |
 | [mixed/one_package](../tests/fixtures/programs/mixed/one_package) | no finding: one package's modules and its tests share a table |
+| [mixed/dupes](../tests/fixtures/programs/mixed/dupes) | 5 clone families: exact, renamed and edited copies in Python, a renamed copy in JS, near copies in C; decoys with the same idioms but other logic, tiny look-alike helpers, and a copy in test code |
 | [mixed/unused](../tests/fixtures/programs/mixed/unused) | 7 unused definitions in Python, JS and C, 1 used only by tests, and 20 decoys that must not be reported (dispatch table, decorator, `getattr`, `__all__`, prefix and suffix dispatch, generated code, outside base, callback, export, macro, `.inc` table, function-pointer table...) |
 
 On real code (the installed Python packages, `/usr/lib/python3/dist-packages`), the first version
@@ -127,6 +159,21 @@ looking up helpers by name. **Known false findings left:** 8 in LibreOffice's `u
 outside the analysed tree, calls them by name) and 2 in numpy (one kept for unpickling old files,
 one named from Cython without a plain string).
 
+### Duplicated logic on real code
+
+- **Recall:** [plant_clones.py](../tests/tools/plant_clones.py) copies 40 random standard-library
+  functions (above the size limits) three times each into a copy of the library: exact, with
+  every local name and string renamed, and with a statement added. Over two seeds (240 copies):
+  exact 95% and 95%, renamed 92% and 98%, edited 95% and 95%. The misses are mostly whole families
+  under the distinct-pieces limit (`__eq__` chains of comparisons).
+- **Precision:** on the standard library itself, 75 groups (1,658 lines to remove: 8 exact, 29
+  renamed, 38 near). A random 15, read side by side, were all real copies: `chunk.py` and
+  `wave.py`, the `utf_16`/`utf_32` codecs, heapq's max-heap variants, asyncio's `recv`/`recv_into`.
+  Some are deliberate (a max-heap variant), but they are duplicated logic all the same.
+  Getting there: boilerplate initialisers (`self.x = x` only) and functions paired with a function
+  nested in them were false findings; the distinct-pieces and nesting rules removed them.
+- **Speed:** 1.6 s for the standard library's saved graph (it re-reads the source).
+
 ## JSON
 
 `report_version` is `"0.1"`. Top level: `source`, `units` (with frontend and lines), `findings`,
@@ -134,4 +181,6 @@ one named from Cython without a plain string).
 `evidence.targets[].uses[]` gives each use's `unit` (component), `function`, `kind`
 (reads/writes/sends_to) and `method` (empty when there isn't one). For `unused` and `test_only`
 findings, `units` is the component, `targets` the definitions' ids, and `evidence.definitions[]`
-gives each one's `id`, `kind`, `file`, `line` and `lines`, with `evidence.lines` the total.
+gives each one's `id`, `kind`, `file`, `line` and `lines`, with `evidence.lines` the total. For
+`duplicated_logic`, `targets` are the functions, and `evidence` has `clone_type` (exact, renamed,
+similar), `similarity`, `members[]` (`id`, `file`, `line`, `lines`, `tokens`) and `lines_saved`.
