@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <string>
 #include <vector>
 
 #include "optum/ir.hpp"
@@ -14,6 +15,7 @@ struct JsStats {
   std::size_t files = 0;
   std::size_t lines = 0;
   std::size_t files_with_syntax_errors = 0;
+  std::vector<std::string> unreadable;  // files that could not be read (analysed as empty)
 };
 
 // `files` are relative to `root`. Declaration files (.d.ts) and minified files (.min.js) are

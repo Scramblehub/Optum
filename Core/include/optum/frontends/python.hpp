@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <string>
 #include <vector>
 
 #include "optum/ir.hpp"
@@ -14,6 +15,7 @@ struct PythonStats {
   std::size_t files = 0;
   std::size_t lines = 0;
   std::size_t files_with_syntax_errors = 0;  // still analysed: tree-sitter recovers
+  std::vector<std::string> unreadable;  // files that could not be read (analysed as empty)
 };
 
 // `path` is a .py file or a directory, searched recursively. Module names are dotted paths

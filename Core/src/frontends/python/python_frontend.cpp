@@ -94,6 +94,7 @@ struct ModuleInfo {
   bool is_package = false;
   std::size_t lines = 0;
   bool syntax_error = false;
+  bool unreadable = false;
   std::vector<Def> defs;  // defs[0] is the module
   std::vector<ImportRef> imports;
   std::vector<CallSite> calls;
@@ -925,13 +926,25 @@ Graph extract_python_files(const fs::path& root, const std::vector<fs::path>& re
     m.name = module_name(rel, m.is_package);
     if (m.name.empty()) m.name = base.filename().string();
 
-    const std::string src = read_file(files[i]);
+    bool readable = true;
+    const std::string src = read_file(files[i], &readable);
+    m.unreadable = !readable;
     m.lines = static_cast<std::size_t>(std::count(src.begin(), src.end(), '\n'));
     ts::TreePtr tree(ts_parser_parse_string(parser.get(), nullptr, src.data(), static_cast<uint32_t>(src.size())));
     const TSNode rootn = ts_tree_root_node(tree.get());
     m.syntax_error = ts_node_has_error(rootn);
     Summarizer(m, src).run(rootn);
   });
+
+  // Stats count every file read, before two files that map to one module are merged below.
+  if (stats) {
+    stats->files = project.mods.size();
+    for (const auto& m : project.mods) {
+      stats->lines += m.lines;
+      stats->files_with_syntax_errors += m.syntax_error ? 1 : 0;
+      if (m.unreadable) stats->unreadable.push_back(m.file);
+    }
+  }
 
   // Two files can map to one module name (e.g. a.py and a/__init__.py); keep the first.
   std::stable_sort(project.mods.begin(), project.mods.end(),
@@ -992,13 +1005,6 @@ Graph extract_python_files(const fs::path& root, const std::vector<fs::path>& re
     }
   }
 
-  if (stats) {
-    stats->files = project.mods.size();
-    for (const auto& m : project.mods) {
-      stats->lines += m.lines;
-      stats->files_with_syntax_errors += m.syntax_error ? 1 : 0;
-    }
-  }
   return g;
 }
 

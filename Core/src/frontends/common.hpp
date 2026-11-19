@@ -30,10 +30,13 @@ void parallel_for(std::size_t n, unsigned threads, F&& f) {
   for (auto& th : pool) th.join();
 }
 
-inline std::string read_file(const std::filesystem::path& p) {
+// The file's bytes. If it can't be read, returns "" and sets *ok = false, so callers can report it
+// instead of silently analysing an empty file.
+inline std::string read_file(const std::filesystem::path& p, bool* ok = nullptr) {
   std::ifstream in(p, std::ios::binary);
   std::stringstream buf;
-  buf << in.rdbuf();
+  if (in) buf << in.rdbuf();
+  if (ok) *ok = in.is_open() && !in.bad();
   return buf.str();
 }
 

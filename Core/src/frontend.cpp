@@ -21,6 +21,13 @@ bool skip_dir(const fs::path& p) {
          name == "node_modules" || name == "venv" || name == "site-packages";
 }
 
+// Unreadable files are analysed as empty modules; say so in the summary and name each one.
+void report_unreadable(const std::vector<std::string>& files, Extraction& x) {
+  if (files.empty()) return;
+  x.summary += " (" + std::to_string(files.size()) + " unreadable)";
+  for (const auto& f : files) x.diagnostics += "cannot read " + f + " (permissions?); treated as empty\n";
+}
+
 // ---------------------------------------------------------------- built-in Python
 
 class PythonFrontend : public Frontend {
@@ -39,6 +46,7 @@ class PythonFrontend : public Frontend {
     if (stats.files_with_syntax_errors) {
       x.summary += " (" + std::to_string(stats.files_with_syntax_errors) + " with syntax errors)";
     }
+    report_unreadable(stats.unreadable, x);
     return x;
   }
 
@@ -63,6 +71,7 @@ class JsFrontend : public Frontend {
     if (stats.files_with_syntax_errors) {
       x.summary += " (" + std::to_string(stats.files_with_syntax_errors) + " with syntax errors)";
     }
+    report_unreadable(stats.unreadable, x);
     return x;
   }
 
@@ -87,6 +96,7 @@ class CFrontend : public Frontend {
     if (stats.files_with_syntax_errors) {
       x.summary += " (" + std::to_string(stats.files_with_syntax_errors) + " with syntax errors)";
     }
+    report_unreadable(stats.unreadable, x);
     return x;
   }
 
