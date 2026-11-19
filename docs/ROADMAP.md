@@ -93,6 +93,7 @@ APIs); stages 5–7 can continue into Phase 2.
 ### Phase 2: Optimize (weeks 8–12)
 
 Start by suggesting; rewrite automatically only once the suggestions are trusted.
+The plan, with answer keys for every analysis: [plans/phase2.md](plans/phase2.md).
 
 | Branch | Job | Size |
 |---|---|---|
