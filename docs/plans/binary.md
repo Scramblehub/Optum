@@ -99,7 +99,7 @@ are for part-time solo work.
 | # | Branch | Job | Size | Gate |
 |---|---|---|---|---|
 | 0 | `docs/binary-plan` | This plan; decision 0005 (ids, scope, licences) | done | — |
-| 1 | `feat/frontend-c` | C source frontend on tree-sitter-c, following the existing C rules in `frontends.md`. The source side of every comparison, and useful by itself | 3–5 days | Samples at 100% / ≥ 95% |
+| 1 | `feat/frontend-c` | C source frontend on tree-sitter-c. The source side of every comparison, and useful by itself | done | Samples 100% / 100%; against GCC's own call graph: cJSON 100% / 100%, zlib 85% / 99% ([notes](../notes/2026-11-18-c-frontend-eval.md)) |
 | 2 | `feat/bin-corpus` | Corpus build recipe (CMake), ground-truth extraction, a scoring tool for function starts | 3–4 days | Corpus builds in CI |
 | 3 | `feat/bin-elf` | ELF reader (sections, `.symtab`, `.dynsym`, PLT/GOT, `.eh_frame`); capstone (submodule, BSD); function discovery from symbols, `.eh_frame` and call targets; direct call graph; imports become `lib:` nodes. ELF files are found by their magic bytes, not their extension | 1–2 weeks | Function starts: ≥ 99% precision and recall with symbols, ≥ 95% recall stripped. Call edges against the C source graph: ≥ 95% precision, ≥ 90% recall at `-O0`; reported per optimisation level |
 | 4 | `feat/bin-lift` | Lift x86-64 basic blocks into a small typed expression IR (values, loads, stores, calls with their argument registers, constants). Constant strings reaching `curl_easy_setopt(CURLOPT_URL)`, `sqlite3_exec` or `PQexec` become `http:` and `sql:` nodes through the existing helpers | 2 weeks | A C version of the `http_glue` sample, built against libcurl, gives the same three `http:` nodes as the Python and JS versions |

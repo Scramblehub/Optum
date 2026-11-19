@@ -90,8 +90,8 @@ same for yours (see `tests/tools/check_shared_ids.py`).
 
 This is what makes the unification work: in
 [tests/fixtures/programs/mixed/crm_glue](../tests/fixtures/programs/mixed/crm_glue), a Python
-script and an n8n workflow call the same shop and CRM APIs, and the merged graph shows both
-pointing at the same three nodes:
+script, a Node script, a C program and an n8n workflow call the same shop and CRM APIs, and the
+merged graph shows all four pointing at the same three nodes:
 
 ![A Python script and an n8n workflow both reading the shop API and sending to the CRM](images/crm_glue_overlap.svg)
 
