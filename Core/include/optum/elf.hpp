@@ -49,9 +49,16 @@ struct File {
   std::unordered_map<std::uint64_t, std::string> got_imports;  // GOT slot -> imported function
   std::vector<std::uint64_t> init_array, fini_array;
   std::vector<std::uint64_t> relative_targets;  // R_X86_64_RELATIVE: addresses stored in data (pointers)
+  std::unordered_map<std::uint64_t, std::uint64_t> relative_at;  // data slot -> the address it holds
+  std::vector<std::string> runpath;  // DT_RUNPATH / DT_RPATH entries, as written ($ORIGIN unexpanded)
   std::vector<Fde> fdes;
 
   const Section* section(std::string_view name) const;
+  // The pointer stored at a data address: from its relocation in position-independent code, else
+  // the 8 bytes in the file. Nothing for addresses outside allocated, non-executable data.
+  std::optional<std::uint64_t> pointer_at(std::uint64_t addr) const;
+  // A NUL-terminated string at an address in read-only or initialised data, if it looks like text.
+  std::optional<std::string> string_at(std::uint64_t addr, std::size_t max = 4096) const;
   const Section* section_at(std::uint64_t addr) const;
   std::span<const std::uint8_t> bytes(const Section& s) const;  // empty for SHT_NOBITS
 };

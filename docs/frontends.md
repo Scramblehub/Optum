@@ -148,9 +148,22 @@ function's final instruction (`ret`, `jmp`, `hlt`, `ud2`, or a call to a no-retu
 | Binary contains function; library contains imported function | `defines` |
 | Binary needs library | `imports` |
 | `call f` / `jmp f` to a function start (a tail call: `attrs.via: "tail_call"`) | `calls` |
-| `call` / `jmp` through a PLT stub or a GOT slot | `calls` to `lib:<library>!<name>`. The library is the one its symbol version names (`GLIBC_2.2.5` → `libc.so.6`), else the only `DT_NEEDED`, else `lib:?` |
+| `call` / `jmp` through a PLT stub or a GOT slot | `calls` to `lib:<library>!<name>`. The library is the one its symbol version names (`GLIBC_2.2.5` → `libc.so.6`); else the `DT_NEEDED` library that exports it, found like the dynamic linker would (RUNPATH/RPATH with `$ORIGIN`, then the system library directories, on the machine running Optum); else the only `DT_NEEDED`; else `lib:?` |
 | A PLT call to a function the binary exports itself (normal in shared libraries) | `calls` to that local function, `attrs.via: "plt"` |
 | Calls through registers or memory without a known target | none yet |
+| libcurl: `curl_easy_setopt(h, CURLOPT_URL, url)` … `curl_easy_perform(h)` | `reads` / `sends_to` an `http:` node, `attrs.method`. Each `perform` uses the URL and method options (`POST`/`POSTFIELDS`, `UPLOAD`/`PUT`, `NOBODY` → HEAD, `CUSTOMREQUEST "PATCH"`) set since the previous one, so requests stay apart when gcc inlines several functions into one |
+| `sqlite3_exec` / `sqlite3_prepare*`, `PQexec` / `PQexecParams` / `PQprepare`, `mysql_query` with SQL text | `reads` / `writes` `sql:<table>` nodes |
+
+**Lifting** (for those two rows): in each function that calls one of these libraries, values are
+followed through registers and stack slots in address order:
+- constants;
+- addresses of string literals (`lea r, [rip+x]`);
+- pointers stored in data (`static const char *URL = "..."`, through its relocation);
+- local buffers filled by `snprintf` / `sprintf` / `strcpy`, including the `_FORTIFY_SOURCE`
+  `__*_chk` versions. printf conversions become `{}`.
+
+Arguments are read from the System V registers at each call. The ids are the same as the source
+frontends', so a compiled program and a script calling one API meet on one node.
 
 Source ids (`c:file#fn`) from debug info aren't produced yet: `bin:` ids are used in every form.
 
@@ -164,7 +177,7 @@ Source ids (`c:file#fn`) from debug info aren't produced yet: `bin:` ids are use
   (`#define zmemcpy memcpy`) aren't followed; C++ isn't supported (a `.h` may hold C++).
 - JS: object-literal methods aren't nodes; `axios.create({ baseURL })` clients and `tsconfig.json`
   path aliases aren't followed; destructured parameters don't get types from their annotation.
-- Binaries: no debug-info reader yet (source ids); no indirect call targets; x86-64 ELF only; no C++
-  demangling.
+- Binaries: no debug-info reader yet (source ids); no indirect call targets; lifting ignores control
+  flow and only follows the libraries listed; x86-64 ELF only; no C++ demangling.
 - n8n: Code nodes' JavaScript and raw SQL queries aren't analysed; sub-workflow calls
   (`executeWorkflow`) aren't linked to the called workflow yet.

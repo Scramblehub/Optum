@@ -141,6 +141,32 @@ std::span<const std::uint8_t> File::bytes(const Section& s) const {
   return {data.data() + s.offset, static_cast<std::size_t>(s.size)};
 }
 
+std::optional<std::uint64_t> File::pointer_at(std::uint64_t addr) const {
+  if (auto it = relative_at.find(addr); it != relative_at.end()) return it->second;
+  const Section* s = section_at(addr);
+  if (!s || s->executable() || s->type == 8) return std::nullopt;
+  const auto b = bytes(*s);
+  const std::uint64_t off = addr - s->addr;
+  if (off + 8 > b.size()) return std::nullopt;
+  std::uint64_t v;
+  std::memcpy(&v, b.data() + off, 8);
+  return v;
+}
+
+std::optional<std::string> File::string_at(std::uint64_t addr, std::size_t max) const {
+  const Section* s = section_at(addr);
+  if (!s || s->executable() || s->type == 8) return std::nullopt;
+  const auto b = bytes(*s);
+  std::string out;
+  for (std::uint64_t off = addr - s->addr; off < b.size() && out.size() < max; ++off) {
+    const auto c = b[off];
+    if (c == 0) return out;
+    if (c < 0x09 || (c > 0x0d && c < 0x20)) return std::nullopt;  // control bytes: not text
+    out.push_back(static_cast<char>(c));
+  }
+  return std::nullopt;  // unterminated, or longer than max
+}
+
 bool is_elf(const std::filesystem::path& p) {
   std::ifstream in(p, std::ios::binary);
   char m[4] = {};
@@ -260,6 +286,14 @@ File read(const std::filesystem::path& p) {
         if (tag == 0) break;
         if (tag == 1) f.needed.push_back(r.cstr(str.offset + val));
         if (tag == 14) f.soname = r.cstr(str.offset + val);
+        if (tag == 29 || tag == 15) {  // DT_RUNPATH, DT_RPATH: ':'-separated
+          std::string list = r.cstr(str.offset + val);
+          for (std::size_t a = 0, b; a <= list.size(); a = b + 1) {
+            b = list.find(':', a);
+            if (b == std::string::npos) b = list.size();
+            if (b > a) f.runpath.push_back(list.substr(a, b - a));
+          }
+        }
       }
     }
     if (s.type == 4) {  // SHT_RELA
@@ -273,6 +307,7 @@ File read(const std::filesystem::path& p) {
           f.got_imports[where] = f.dynsym[sym].name;
         } else if (type == 8) {  // RELATIVE: a pointer stored in data
           f.relative_targets.push_back(static_cast<std::uint64_t>(addend));
+          f.relative_at[where] = static_cast<std::uint64_t>(addend);
         }
       }
     }

@@ -5,7 +5,10 @@ Runs `optum graph` on every corpus binary in each form, then compares with the a
   - function starts: precision and recall (all functions, and source functions only);
   - calls: Optum's call edges between the binary's own functions, mapped to source ids through the
     answer key's addresses (GCC's .cold / .part pieces map to their parent), against the calls the
-    compiler emitted at that level. Calls to imported functions and through pointers aren't scored.
+    compiler emitted at that level. Calls to imported functions and through pointers aren't scored;
+  - reach (binaries whose answer key names a source graph): the APIs and tables reached (reads /
+    writes / sends_to to http: and sql: nodes) must equal the hand-checked source graph's, as
+    (node, kind) pairs; at -O0, where functions aren't inlined, also which function reaches each.
 
 Usage:
   score_binary.py --optum build/release/Core/optum --corpus build/corpus [--forms bare,stripped]
@@ -35,6 +38,7 @@ def main():
     ap.add_argument("--min-func-precision", type=float, default=0)
     ap.add_argument("--min-call-recall", type=float, default=0)
     ap.add_argument("--min-call-precision", type=float, default=0)
+    ap.add_argument("--require-reach", action="store_true", help="fail unless every reach check matches")
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
     corpus = os.path.abspath(args.corpus)
@@ -42,6 +46,8 @@ def main():
     manifest = json.load(open(os.path.join(corpus, "manifest.json")))["binaries"]
 
     failed = False
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    reach_rows = []
     print(f"{'form':9} {'opt':4} {'functions':>9} {'precision':>10} {'recall':>8} {'calls':>6} {'precision':>10} {'recall':>8}")
     for form in args.forms.split(","):
         per_opt = collections.defaultdict(collections.Counter)
@@ -75,6 +81,17 @@ def main():
             c["c_truth"] += len(truth_calls)
             c["c_found"] += len(ours)
             c["c_hit"] += len(ours & truth_calls)
+            if "source_graph" in t:
+                src = json.load(open(os.path.join(repo, t["source_graph"])))
+                outward = ("reads", "writes", "sends_to")
+                want = {(x["to"], x["kind"]) for x in src["edges"] if x["kind"] in outward and x["to"].startswith(("http:", "sql:"))}
+                got = {(x["to"], x["kind"]) for x in g["edges"] if x["kind"] in outward and x["from"].startswith("bin:")}
+                ok = want == got
+                if e["opt"] == "-O0":  # no inlining: the function reaching each must match too
+                    want_f = {(x["from"], x["to"], x["kind"]) for x in src["edges"] if (x["to"], x["kind"]) in want}
+                    got_f = {(sid.get(addr_of.get(x["from"])), x["to"], x["kind"]) for x in g["edges"] if (x["to"], x["kind"]) in got}
+                    ok = ok and want_f == got_f
+                reach_rows.append((form, e["opt"], e["binary"], ok, sorted(want - got), sorted(got - want)))
             if args.verbose:
                 missed = sorted(truth_calls - ours)[:3]
                 extra = sorted(ours - truth_calls)[:3]
@@ -91,6 +108,13 @@ def main():
         print(f"{form:9} {'all':4} {total['f_truth']:9} {fp:9.1f}% {fr:7.1f}% {total['c_truth']:6} {cp:9.1f}% {cr:7.1f}%")
         if fp < 100 * args.min_func_precision or fr < 100 * args.min_func_recall or \
            cp < 100 * args.min_call_precision or cr < 100 * args.min_call_recall:
+            failed = True
+    if reach_rows:
+        bad = [r for r in reach_rows if not r[3]]
+        print(f"reach (APIs and tables vs the source graph): {len(reach_rows) - len(bad)}/{len(reach_rows)} binaries match")
+        for form, opt, name, _, missing, extra in bad:
+            print(f"   {form}/{opt}/{name}: missing {missing}; extra {extra}")
+        if bad and args.require_reach:
             failed = True
     sys.exit(1 if failed else 0)
 
