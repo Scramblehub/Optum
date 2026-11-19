@@ -76,10 +76,10 @@ SourceLoc loc_from_json(const json& j, const std::string& path) {
   if (j.contains("address")) {
     const std::string s = get_string(j, "address", path);
     std::uint64_t addr = 0;
-    const char* begin = s.data() + 2;
-    const char* end = s.data() + s.size();
     const bool hex_prefix = s.size() > 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X');
     if (!hex_prefix) fail(path + ".address", "expected a hex string like \"0x401000\"");
+    const char* begin = s.data() + 2;
+    const char* end = s.data() + s.size();
     auto [ptr, ec] = std::from_chars(begin, end, addr, 16);
     if (ec != std::errc() || ptr != end) {
       fail(path + ".address", "expected a hex string like \"0x401000\"");
@@ -105,13 +105,31 @@ void read_common(T& item, const json& j, const std::string& path) {
   }
 }
 
+// True for exactly <digits>.<digits>.<digits>, the shape ir.schema.json requires.
+bool is_dotted_triple(std::string_view v) {
+  int dots = 0;
+  bool digit_seen = false;  // since the last dot
+  for (const char c : v) {
+    if (c == '.') {
+      if (!digit_seen) return false;
+      ++dots;
+      digit_seen = false;
+    } else if (c >= '0' && c <= '9') {
+      digit_seen = true;
+    } else {
+      return false;
+    }
+  }
+  return dots == 2 && digit_seen;
+}
+
 // Accepts the same major.minor as this build; patch may differ.
 void check_version(const json& j) {
   if (!j.is_string()) fail("ir_version", "expected a string like \"0.1.0\"");
   const std::string theirs = j.get<std::string>();
   const std::string_view ours = kIrVersion;
   auto major_minor = [](std::string_view v) { return v.substr(0, v.rfind('.')); };
-  if (theirs.find('.') == theirs.rfind('.') || major_minor(theirs) != major_minor(ours)) {
+  if (!is_dotted_triple(theirs) || major_minor(theirs) != major_minor(ours)) {
     fail("ir_version", "unsupported version '" + theirs + "', this build reads " +
                            std::string(major_minor(ours)) + ".x");
   }
