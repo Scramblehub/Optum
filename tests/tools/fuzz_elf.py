@@ -16,9 +16,26 @@ import sys
 import tempfile
 
 
+def sections(b):
+    """(name, offset, size) of each section, read from the section headers."""
+    try:
+        shoff, = struct.unpack_from("<Q", b, 40)
+        shentsize, shnum, shstrndx = struct.unpack_from("<HHH", b, 58)
+        heads = [struct.unpack_from("<IIQQQQ", b, shoff + i * shentsize) for i in range(shnum)]
+        stroff = heads[shstrndx][4]
+        out = []
+        for name, _type, _flags, _addr, off, size in heads:
+            end = b.index(0, stroff + name)
+            out.append((bytes(b[stroff + name:end]).decode("ascii", "replace"), off, size))
+        return out
+    except (struct.error, ValueError, IndexError):
+        return []
+
+
 def mutate(data, rng):
     b = bytearray(data)
-    choice = rng.randrange(5)
+    debug = [s for s in sections(b) if s[0].startswith(".debug_") and s[2] > 0 and s[1] + s[2] <= len(b)]
+    choice = rng.randrange(7 if debug else 5)
     if choice == 0:  # random byte flips
         for _ in range(rng.randint(1, 64)):
             b[rng.randrange(len(b))] = rng.randrange(256)
@@ -28,6 +45,10 @@ def mutate(data, rng):
         off = rng.choice([24, 32, 40, 54, 56, 58, 60, 62])
         width = 8 if off in (24, 32, 40) else 2
         b[off:off + width] = rng.randbytes(width)
+    elif choice >= 5:  # corrupt bytes inside debug info (the DWARF reader's input)
+        _name, off, size = rng.choice(debug)
+        for _ in range(rng.randint(1, 16)):
+            b[off + rng.randrange(size)] = rng.randrange(256)
     else:  # corrupt a section header field
         shoff, shentsize, shnum = struct.unpack_from("<QHH", b, 40)[0], *struct.unpack_from("<HH", b, 58)
         if shnum and shoff + shnum * 64 <= len(b):

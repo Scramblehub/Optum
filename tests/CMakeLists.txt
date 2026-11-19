@@ -7,6 +7,7 @@ add_executable(optum_tests
   test_view_export.cpp
   test_process.cpp
   test_elf.cpp
+  test_dwarf.cpp
 )
 target_link_libraries(optum_tests PRIVATE optum_core Catch2::Catch2WithMain)
 target_compile_definitions(optum_tests PRIVATE OPTUM_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
@@ -237,15 +238,23 @@ if(Python3_FOUND AND GCC)
   add_test(NAME binary_bare
            COMMAND ${SCORE_BIN} --forms bare --min-func-precision 0.95 --min-func-recall 0.90
                    --min-call-precision 0.95 --min-call-recall 0.85 --require-reach)
+  # With debug info, every project function gets its source id, and an -O0 build's graph merges
+  # node for node with the source graph (docs/decisions/0005-binaries.md).
+  add_test(NAME binary_debug
+           COMMAND ${SCORE_BIN} --forms debug --min-func-precision 1 --min-func-recall 1 --min-source-ids 1 --require-reach)
+  add_test(NAME binary_merges_with_source
+           COMMAND ${Python3_EXECUTABLE} ${TOOLS}/check_merge.py --optum $<TARGET_FILE:optum>
+                   --source ${FIXTURES}/programs/c --binary ${CORPUS_DIR}/samples/O0/debug/multi --min-functions 9)
   # Binaries in a repo are untrusted input: mutated ones must never crash the frontend.
   add_test(NAME binary_fuzz
            COMMAND ${Python3_EXECUTABLE} ${TOOLS}/fuzz_elf.py --optum $<TARGET_FILE:optum> --cases 150
                    --seed-binary ${CORPUS_DIR}/samples/O2/symbols/multi
                    --seed-binary ${CORPUS_DIR}/cJSON/O2/symbols/libcjson.so
                    --seed-binary ${CORPUS_DIR}/zlib/O0/bare/minigzip
-                   --seed-binary ${CORPUS_DIR}/glue/O0/symbols/http_glue)
+                   --seed-binary ${CORPUS_DIR}/glue/O0/symbols/http_glue
+                   --seed-binary ${CORPUS_DIR}/cJSON/O2/debug/libcjson.so)
   set_tests_properties(corpus_answer_keys corpus_symbols_baseline corpus_eh_frame_baseline
-                       binary_symbols_and_stripped binary_bare binary_fuzz PROPERTIES
+                       binary_symbols_and_stripped binary_bare binary_debug binary_merges_with_source binary_fuzz PROPERTIES
                        FIXTURES_REQUIRED corpus)
   set_tests_properties(binary_fuzz PROPERTIES TIMEOUT 900)
 endif()

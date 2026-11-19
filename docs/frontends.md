@@ -127,6 +127,7 @@ files, other architectures and malformed files are skipped with a message. Plan:
 | Thing | Node | Id example |
 |---|---|---|
 | The binary | `program` (it has an interpreter, PIE included) or `module` (a shared library); `attrs.soname` | `bin:minigzip`, `bin:libz.so` |
+| A function with debug info | `function`, its **source id**; `loc` is the source file and line (and the address), `attrs.address`, `attrs.binary` | `c:gzlib.c#gz_open` (`c:minigzip.c#gz_compress.cold` for a split-off piece) |
 | A function with a symbol | `function`, `loc.address`, `attrs.size`, `attrs.found` | `bin:minigzip!gz_compress` (`!name@0x…` when two share a name) |
 | A function without one | `function`, `confidence: inferred` if found only by the gap rule | `bin:minigzip!0x4a20` |
 | A library from `DT_NEEDED` | `module`, `attrs.third_party` | `lib:libc.so.6` |
@@ -165,7 +166,23 @@ followed through registers and stack slots in address order:
 Arguments are read from the System V registers at each call. The ids are the same as the source
 frontends', so a compiled program and a script calling one API meet on one node.
 
-Source ids (`c:file#fn`) from debug info aren't produced yet: `bin:` ids are used in every form.
+**Source ids from debug info** (DWARF 4 and 5, our own reader):
+- **Which entry:** a function's id is `c:<declaring file>#<name>`. The name is the symbol's when
+  there is one, so split-off pieces keep `.cold` / `.part.0`. Clones find their name and file
+  through `DW_AT_abstract_origin` / `DW_AT_specification`, and split-off ranges map to their
+  function.
+- **Code without an entry:** a symbol whose code has no debug entry is matched by name to a
+  definition without an address, but only if that name is defined in one file. Prototypes
+  (`DW_AT_declaration`) never count.
+- **Paths:** relative paths are used as recorded (builds with `-ffile-prefix-map`). Absolute paths
+  are made relative to the analysed directory when the source lies under it, and kept absolute
+  otherwise.
+- **One node per body:** copies of one source function (a header's `static inline`) share one node,
+  and two names folded onto one body get one node.
+- **Malformed debug info:** the binary is analysed without it, with a message.
+
+An unoptimised debug build therefore merges node for node with the C frontend's graph of its source,
+when both are analysed from the directory the build used as its root.
 
 ## Known gaps (0.1)
 
@@ -177,7 +194,8 @@ Source ids (`c:file#fn`) from debug info aren't produced yet: `bin:` ids are use
   (`#define zmemcpy memcpy`) aren't followed; C++ isn't supported (a `.h` may hold C++).
 - JS: object-literal methods aren't nodes; `axios.create({ baseURL })` clients and `tsconfig.json`
   path aliases aren't followed; destructured parameters don't get types from their annotation.
-- Binaries: no debug-info reader yet (source ids); no indirect call targets; lifting ignores control
-  flow and only follows the libraries listed; x86-64 ELF only; no C++ demangling.
+- Binaries: no indirect call targets; lifting ignores control flow and only follows the libraries
+  listed; compressed debug sections and split DWARF (`.dwo`) aren't read; x86-64 ELF only; no C++
+  demangling.
 - n8n: Code nodes' JavaScript and raw SQL queries aren't analysed; sub-workflow calls
   (`executeWorkflow`) aren't linked to the called workflow yet.

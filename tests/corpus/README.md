@@ -49,7 +49,9 @@ hand-checked source graph whose APIs and tables it must reach.
   - its address, size and whether it's `static`;
   - its source file and line, and its **source id** in the C frontend's form
     (`c:deflate.c#deflate`), so a binary's graph can be scored against, and merged with, the
-    source graph;
+    source graph. The file is the declaring file from the debug info (`DW_AT_decl_file`), read
+    with binutils' `readelf`. That makes it independent of Optum's own DWARF reader. `addr2line`'s
+    line-table answer is only a fallback: for a header's inline function it gives the caller's file;
   - pieces GCC splits off or clones when optimising (`gz_compress.cold`, `.part.0`, `.isra.0`,
     `.constprop.0`, `.localalias`) have `fragment` set and their parent function's source id;
   - size-0 function symbols in code sections are included (the C runtime's `frame_dummy` and

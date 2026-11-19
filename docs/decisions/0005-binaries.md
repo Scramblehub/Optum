@@ -1,6 +1,7 @@
 # 0005: How binaries join the graph
 
-*Proposed 2026-11-18. Plan: [docs/plans/binary.md](../plans/binary.md).*
+*Accepted 2026-11-18, and implemented: all three id tiers, the confidence levels and the licences
+(stages 1–4 of [docs/plans/binary.md](../plans/binary.md)).*
 
 ## Context
 Decision 0002 put binaries after source. With the Python and JS frontends working, binary

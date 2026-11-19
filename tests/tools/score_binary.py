@@ -6,6 +6,8 @@ Runs `optum graph` on every corpus binary in each form, then compares with the a
   - calls: Optum's call edges between the binary's own functions, mapped to source ids through the
     answer key's addresses (GCC's .cold / .part pieces map to their parent), against the calls the
     compiler emitted at that level. Calls to imported functions and through pointers aren't scored;
+  - source ids (debug form): with debug info, every project function's node id must be its source
+    id from the answer key (c:<file>#<name>; GCC's split-off pieces keep their suffix, .cold...);
   - reach (binaries whose answer key names a source graph): the APIs and tables reached (reads /
     writes / sends_to to http: and sql: nodes) must equal the hand-checked source graph's, as
     (node, kind) pairs; at -O0, where functions aren't inlined, also which function reaches each.
@@ -39,6 +41,7 @@ def main():
     ap.add_argument("--min-call-recall", type=float, default=0)
     ap.add_argument("--min-call-precision", type=float, default=0)
     ap.add_argument("--require-reach", action="store_true", help="fail unless every reach check matches")
+    ap.add_argument("--min-source-ids", type=float, default=0, help="debug form: share of project functions with the right source id")
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
     corpus = os.path.abspath(args.corpus)
@@ -48,6 +51,7 @@ def main():
     failed = False
     repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     reach_rows = []
+    sid_total, sid_hit, sid_wrong = 0, 0, []
     print(f"{'form':9} {'opt':4} {'functions':>9} {'precision':>10} {'recall':>8} {'calls':>6} {'precision':>10} {'recall':>8}")
     for form in args.forms.split(","):
         per_opt = collections.defaultdict(collections.Counter)
@@ -81,11 +85,29 @@ def main():
             c["c_truth"] += len(truth_calls)
             c["c_found"] += len(ours)
             c["c_hit"] += len(ours & truth_calls)
+            if form == "debug":
+                ids_at = {int(n["loc"]["address"], 16): n["id"] for n in g["nodes"]
+                          if n["kind"] == "function" and n.get("loc", {}).get("address")}
+                # Per address: identical-code folding can give one body several source names
+                # (sqlite3SelectDelete and sqlite3SelectDeleteGeneric); any of them is right.
+                acceptable = collections.defaultdict(set)
+                for f in t["functions"]:
+                    if f["origin"] != "project" or f.get("fragment") == "localalias":
+                        continue  # a .localalias is a second name at the same address, not code
+                    want = f["source_id"] if "fragment" not in f else f["source_id"].rsplit("#", 1)[0] + "#" + f["name"]
+                    acceptable[int(f["address"], 16)].add(want)
+                for a, wants in acceptable.items():
+                    got = ids_at.get(a)
+                    sid_total += 1
+                    if got in wants:
+                        sid_hit += 1
+                    elif len(sid_wrong) < 5:
+                        sid_wrong.append((e["project"], e["opt"], e["binary"], sorted(wants), got))
             if "source_graph" in t:
                 src = json.load(open(os.path.join(repo, t["source_graph"])))
                 outward = ("reads", "writes", "sends_to")
                 want = {(x["to"], x["kind"]) for x in src["edges"] if x["kind"] in outward and x["to"].startswith(("http:", "sql:"))}
-                got = {(x["to"], x["kind"]) for x in g["edges"] if x["kind"] in outward and x["from"].startswith("bin:")}
+                got = {(x["to"], x["kind"]) for x in g["edges"] if x["kind"] in outward and x.get("frontend") == "binary"}
                 ok = want == got
                 if e["opt"] == "-O0":  # no inlining: the function reaching each must match too
                     want_f = {(x["from"], x["to"], x["kind"]) for x in src["edges"] if (x["to"], x["kind"]) in want}
@@ -108,6 +130,12 @@ def main():
         print(f"{form:9} {'all':4} {total['f_truth']:9} {fp:9.1f}% {fr:7.1f}% {total['c_truth']:6} {cp:9.1f}% {cr:7.1f}%")
         if fp < 100 * args.min_func_precision or fr < 100 * args.min_func_recall or \
            cp < 100 * args.min_call_precision or cr < 100 * args.min_call_recall:
+            failed = True
+    if sid_total:
+        print(f"source ids (debug form): {sid_hit}/{sid_total} project function addresses ({pct(sid_hit, sid_total):.1f}%)")
+        for w in sid_wrong:
+            print(f"   {w[0]}/{w[1]}/{w[2]}: want {w[3]}, got {w[4]}")
+        if sid_hit < args.min_source_ids * sid_total:
             failed = True
     if reach_rows:
         bad = [r for r in reach_rows if not r[3]]
