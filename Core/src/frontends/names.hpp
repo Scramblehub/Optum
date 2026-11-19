@@ -45,12 +45,15 @@ using DefFields = std::unordered_map<std::string_view, const char*>;
 inline void count_name_uses(TSNode root, std::string_view src, const std::unordered_set<std::string_view>& name_types,
                             const std::unordered_set<std::string_view>& string_types, const DefFields& def_fields,
                             NameUses& out, const std::unordered_set<std::string_view>& text_types = {}) {
+  // The walk keeps its own stack of ancestors: ts_node_parent() walks down from the root each
+  // time, which made deeply nested code (a 20,000-call chain) quadratic.
   TSTreeCursor cur = ts_tree_cursor_new(root);
+  std::vector<TSNode> ancestors;
   for (;;) {
     const TSNode n = ts_tree_cursor_current_node(&cur);
     const std::string_view type = ts_node_type(n);
     if (name_types.count(type)) {
-      const TSNode parent = ts_node_parent(n);
+      const TSNode parent = ancestors.empty() ? TSNode{} : ancestors.back();
       bool is_def = false;
       if (!ts_node_is_null(parent)) {
         if (auto it = def_fields.find(ts_node_type(parent)); it != def_fields.end()) {
@@ -99,12 +102,16 @@ inline void count_name_uses(TSNode root, std::string_view src, const std::unorde
       if (const auto dot = t.rfind('.'); dot != std::string_view::npos) t = t.substr(dot + 1);
       if (identifier_like(t)) ++out[std::string(t)];
     }
-    if (ts_tree_cursor_goto_first_child(&cur)) continue;
+    if (ts_tree_cursor_goto_first_child(&cur)) {
+      ancestors.push_back(n);
+      continue;
+    }
     while (!ts_tree_cursor_goto_next_sibling(&cur)) {
       if (!ts_tree_cursor_goto_parent(&cur)) {
         ts_tree_cursor_delete(&cur);
         return;
       }
+      ancestors.pop_back();
     }
   }
 }
