@@ -4,6 +4,7 @@ add_executable(optum_tests
   test_ir_json.cpp
   test_score.cpp
   test_sql_http.cpp
+  test_view_export.cpp
 )
 target_link_libraries(optum_tests PRIVATE optum_core Catch2::Catch2WithMain)
 
@@ -61,6 +62,31 @@ foreach(dir ${PY_PROGRAMS})
   add_test(NAME frontend_python_${name}
            COMMAND sh -c "$<TARGET_FILE:optum> graph ${dir} -q -o ${out} && $<TARGET_FILE:optum> score ${dir}/expected.json ${out} --min-precision 1 --min-recall ${min_recall}")
 endforeach()
+
+# Analysing a package directory directly names modules from the outermost package.
+add_test(NAME frontend_python_package_root_naming
+         COMMAND optum graph -q --indent -1 ${FIXTURES}/programs/python/imports/shop)
+set_tests_properties(frontend_python_package_root_naming PROPERTIES
+  PASS_REGULAR_EXPRESSION "\"id\":\"py:shop.pricing\""
+  FAIL_REGULAR_EXPRESSION "\"py:pricing\"")
+
+# Diagrams through the CLI.
+set(SAMPLE_HTTP ${FIXTURES}/programs/python/http_glue)
+add_test(NAME cli_graph_dot COMMAND optum graph -q -f dot ${SAMPLE_HTTP})
+set_tests_properties(cli_graph_dot PROPERTIES PASS_REGULAR_EXPRESSION "digraph optum")
+add_test(NAME cli_graph_mermaid COMMAND optum graph -q -f mermaid ${SAMPLE_HTTP})
+set_tests_properties(cli_graph_mermaid PROPERTIES PASS_REGULAR_EXPRESSION "flowchart LR")
+add_test(NAME cli_graph_module_level COMMAND optum graph -q --level module --indent -1 ${FIXTURES}/programs/python/imports)
+set_tests_properties(cli_graph_module_level PROPERTIES PASS_REGULAR_EXPRESSION "\"count\":")
+add_test(NAME cli_focus_ambiguous COMMAND optum graph -q --focus area -f dot ${FIXTURES}/programs/python/classes)
+set_tests_properties(cli_focus_ambiguous PROPERTIES PASS_REGULAR_EXPRESSION "matches 3 nodes")
+add_test(NAME cli_max_nodes_refuses COMMAND optum graph -q -f dot --max-nodes 2 ${SAMPLE_HTTP})
+set_tests_properties(cli_max_nodes_refuses PROPERTIES PASS_REGULAR_EXPRESSION "too many for a readable diagram")
+find_program(GRAPHVIZ_DOT dot)
+if(GRAPHVIZ_DOT)
+  add_test(NAME cli_export_svg COMMAND optum export ${FIXTURES}/ir/valid/order_sync.json)
+  set_tests_properties(cli_export_svg PROPERTIES PASS_REGULAR_EXPRESSION "<svg")
+endif()
 
 add_test(NAME cli_score_detects_gaps
          COMMAND optum score ${FIXTURES}/programs/python/classes/expected.json

@@ -1,13 +1,17 @@
 #include <CLI/CLI.hpp>
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 
+#include "optum/export.hpp"
 #include "optum/frontends/python.hpp"
 #include "optum/ir.hpp"
 #include "optum/score.hpp"
 #include "optum/version.hpp"
+#include "optum/view.hpp"
 
 namespace {
 
@@ -25,6 +29,102 @@ int write_json(const nlohmann::json& j, const std::string& out_path, int indent)
   return 0;
 }
 
+int write_text(const std::string& text, const std::string& out_path) {
+  if (out_path.empty() || out_path == "-") {
+    std::cout << text;
+    return 0;
+  }
+  std::ofstream out(out_path);
+  if (!out) {
+    std::cerr << "optum: cannot write " << out_path << "\n";
+    return 2;
+  }
+  out << text;
+  return 0;
+}
+
+std::string shell_quote(const std::string& s) {
+  std::string q = "'";
+  for (char c : s) q += c == '\'' ? std::string("'\\''") : std::string(1, c);
+  return q + "'";
+}
+
+// SVG through Graphviz's `dot`, which must be installed.
+int write_svg(const std::string& dot, const std::string& out_path) {
+  if (std::system("command -v dot > /dev/null 2>&1") != 0) {
+    std::cerr << "optum: --format svg needs Graphviz ('dot' not found). Install graphviz, or use "
+                 "--format dot and render it elsewhere.\n";
+    return 2;
+  }
+  std::string cmd = "dot -Tsvg";
+  if (!out_path.empty() && out_path != "-") cmd += " -o " + shell_quote(out_path);
+  FILE* pipe = popen(cmd.c_str(), "w");
+  if (!pipe) {
+    std::cerr << "optum: cannot run dot\n";
+    return 2;
+  }
+  std::fwrite(dot.data(), 1, dot.size(), pipe);
+  const int status = pclose(pipe);
+  if (status != 0) {
+    std::cerr << "optum: dot failed (status " << status << ")\n";
+    return 2;
+  }
+  return 0;
+}
+
+// Options shared by `graph` and `export`: which part of the graph, and in what format.
+struct ViewCli {
+  std::string format = "json";
+  std::string level = "function";
+  std::string focus;
+  int depth = 1;
+  std::vector<std::string> edges;
+  bool no_inferred = false;
+  std::size_t max_nodes = 0;
+};
+
+void add_view_options(CLI::App* cmd, ViewCli& v) {
+  cmd->add_option("-f,--format", v.format, "json, dot, svg or mermaid")
+      ->check(CLI::IsMember({"json", "dot", "svg", "mermaid"}))
+      ->capture_default_str();
+  cmd->add_option("--level", v.level, "function, or module to collapse into modules")
+      ->check(CLI::IsMember({"function", "module"}))
+      ->capture_default_str();
+  cmd->add_option("--focus", v.focus, "Only this node (id or unique id ending) and its neighbours");
+  cmd->add_option("--depth", v.depth, "With --focus: how many edges away to include")->capture_default_str();
+  cmd->add_option("--edges", v.edges, "Only these edge kinds, e.g. --edges calls,reads")->delimiter(',');
+  cmd->add_flag("--no-inferred", v.no_inferred, "Leave out inferred (guessed) edges");
+  cmd->add_option("--max-nodes", v.max_nodes,
+                  "Refuse diagrams larger than this (default 1500 for dot/svg, 300 for mermaid)");
+}
+
+int emit(const optum::Graph& g, const ViewCli& v, const std::string& out_path, int indent) {
+  optum::ViewOptions o;
+  o.level = v.level == "module" ? optum::Level::Module : optum::Level::Function;
+  o.focus = v.focus;
+  o.depth = v.depth;
+  o.hide_inferred = v.no_inferred;
+  for (const auto& k : v.edges) {
+    const auto kind = optum::edge_kind_from_string(k);
+    if (!kind) throw optum::IrError("unknown edge kind '" + k + "' in --edges");
+    o.edge_kinds.push_back(*kind);
+  }
+  const optum::Graph view = o.is_identity() ? optum::Graph{} : optum::make_view(g, o);
+  const optum::Graph& shown = o.is_identity() ? g : view;
+
+  if (v.format == "json") return write_json(optum::to_json(shown), out_path, indent);
+  const std::size_t limit = v.max_nodes ? v.max_nodes : v.format == "mermaid" ? 300 : 1500;
+  if (shown.nodes().size() > limit) {
+    std::cerr << "optum: " << shown.nodes().size() << " nodes is too many for a readable diagram "
+              << "(limit " << limit << "). Try --level module, --focus <node>, --edges, "
+              << "or raise --max-nodes.\n";
+    return 2;
+  }
+  if (v.format == "mermaid") return write_text(optum::to_mermaid(shown), out_path);
+  const std::string dot = optum::to_dot(shown);
+  return v.format == "dot" ? write_text(dot, out_path) : write_svg(dot, out_path);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -36,7 +136,8 @@ int main(int argc, char** argv) {
   std::string out_path;
 
   std::string path;
-  auto* graph = app.add_subcommand("graph", "Break a file or directory down into a graph (JSON)");
+  ViewCli view;
+  auto* graph = app.add_subcommand("graph", "Break a file or directory down into a graph");
   graph->add_option("path", path, "File or directory to read")->required();
   graph->add_option("-o,--out", out_path, "Output file (default: stdout)");
   graph->add_option("--indent", indent, "JSON indent; -1 for compact")->capture_default_str();
@@ -44,6 +145,16 @@ int main(int argc, char** argv) {
   bool quiet = false;
   graph->add_option("-j,--threads", threads, "Worker threads; 0 = all cores")->capture_default_str();
   graph->add_flag("-q,--quiet", quiet, "Don't print statistics to stderr");
+  add_view_options(graph, view);
+
+  std::string export_path;
+  auto* exp = app.add_subcommand("export", "Turn a graph JSON file into a diagram or a smaller graph");
+  exp->add_option("graph", export_path, "Graph JSON file")->required();
+  exp->add_option("-o,--out", out_path, "Output file (default: stdout)");
+  exp->add_option("--indent", indent, "JSON indent; -1 for compact")->capture_default_str();
+  ViewCli export_view;
+  export_view.format = "svg";
+  add_view_options(exp, export_view);
 
   std::vector<std::string> check_files;
   auto* check = app.add_subcommand("check", "Validate graph JSON files against the IR format");
@@ -86,8 +197,9 @@ int main(int argc, char** argv) {
         std::cerr << " -> " << g.nodes().size() << " nodes, " << g.edges().size() << " edges in "
                   << ms << " ms\n";
       }
-      return write_json(optum::to_json(g), out_path, indent);
+      return emit(g, view, out_path, indent);
     }
+    if (*exp) return emit(optum::load_graph(export_path), export_view, out_path, indent);
     if (*check) {
       int failures = 0;
       for (const auto& f : check_files) {
