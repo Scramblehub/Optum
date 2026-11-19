@@ -1,6 +1,8 @@
 # Plan: Phase 2, from graph to diagnosis
 
 *Draft of 2026-11-18. Refines the Phase 2 rows of the [roadmap](../ROADMAP.md).*
+**Done 2026-11-19 (v0.2):** every branch below shipped and its gate is met; the results are in
+the [changelog](../CHANGELOG.md).
 
 ## The goal
 

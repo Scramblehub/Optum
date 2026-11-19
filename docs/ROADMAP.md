@@ -90,21 +90,34 @@ this machine (32 cores). On the fixtures: call-edge precision ≥ 95% and recall
 against the hand-checked graphs, with the trace check agreeing. Binary stages 1–4 are done (binaries in the graph with their imports and
 APIs); stages 5–7 can continue into Phase 2.
 
-### Phase 2: Optimize (weeks 8–12)
+### Phase 2: Optimize (weeks 8–12) ✓ done (v0.2)
 
 Start by suggesting; rewrite automatically only once the suggestions are trusted.
-The plan, with answer keys for every analysis: [plans/phase2.md](plans/phase2.md).
+The plan, with answer keys for every analysis: [plans/phase2.md](plans/phase2.md). What shipped:
+[changelog](CHANGELOG.md).
 
-| Branch | Job | Size |
+| Branch | Job | Status |
 |---|---|---|
-| `feat/analysis-dead` | Unreachable functions, unused modules, unused external endpoints | 3 days |
-| `feat/analysis-dupes` | Duplicated logic: normalize function bodies to skeletons and cluster them (the CGL structure-memory idea, in a simple first form) | 1–2 weeks |
-| `feat/analysis-entities` | Find the same entity in several places (a `Customer` class, a `customers` table, a CRM payload) and propose one definition | 1 week |
-| `feat/report` | `optum diagnose`: one report listing waste, priced where it can be (lines, endpoints, duplicated stores). Started as `feat/diagnose`: report frame and overlapping glue ([docs/diagnose.md](diagnose.md)) | 3 days |
-| `feat/rewrite-one` | One automatic fix end to end, e.g. merge duplicated functions, gated by the fixture tests passing before and after | 1–2 weeks |
+| `feat/diagnose` | `optum diagnose`: the report (Markdown for people, JSON for agents) and its first finding, overlapping glue ([diagnose.md](diagnose.md)) | done (#31) |
+| `feat/analysis-unused` | Unused code and code only tests use, with `attrs.local` / `attrs.referenced` from the frontends | done (#36) |
+| `feat/analysis-dupes` | Duplicated logic: CGL structure memory on source code (exact, renamed, near copies) | done (#37) |
+| `feat/analysis-entities` | The same data in several places (classes, tables, API payloads), matched by identity, never coincidence; regulated forms left apart | done (#38) |
+| `feat/rewrite-one` | The first automatic fix: merge exact duplicate Python functions and methods, gated by the project's tests ([fixes.md](fixes.md)) | done (#39, #40) |
+| `fix/diagnose-own-code` | Leave vendored, build, example and generated code out of findings (from the stress test) | done (#41) |
 
-**Gate v0.2:** on a real repo, the report finds duplications a person agrees with, and one
-automatic rewrite merges with all tests still passing.
+**Gate v0.2** (on a real repo, the report finds duplications a person agrees with, and one
+automatic rewrite merges with all tests still passing): **met**, see the [real-repos
+note](notes/2026-11-19-real-repos.md).
+- Duplications: on sympy and sphinx, a random 12 duplicate groups read side by side were all real
+  copies (plus 15 of 15 on the standard library). They were checked by Claude: worth a look by a
+  person outside the project before calling the report trusted.
+- Rewrite: 8 merges applied in copies of real projects with their own tests passing before and
+  after: sympy (6 merges, 1,906 tests) and networkx (2 merges, 1,413 tests). The test gate also
+  caught a bug of the fix's own (two merges making an import cycle together) and restored every
+  file; it's fixed.
+
+Not measured yet: the same-entity finding on real business code (classes, tables and payloads
+side by side); that's what Phase 3's test company is for.
 
 ### Phase 3: Unify (weeks 13–16, can stretch to 24)
 
@@ -131,6 +144,17 @@ reconciles exactly, and the before/after simplicity numbers from section 3.4 of 
 are reported.
 
 ## Later improvements (backlog)
+
+From Phase 2:
+- **The fix: copied methods across modules** get a shared base class or mixin, instead of one
+  module importing another (sympy's `boson.py` importing `fermion.py` for a constructor).
+- **The fix: near copies** (a merged version, not one kept) and other languages.
+- **`optum graph` reads binaries twice** (the binary frontend, then the name scan for unused code):
+  about +1.6 s on dist-packages.
+- **Python frontend memory:** call arguments kept for parameter flows and callbacks (+20% peak on
+  dist-packages).
+- **Unused code:** functions called by name from C (CPython's core, numpy, pyuno) can't be seen in
+  Python source; known false findings.
 
 Picked up when they become the bottleneck, not before. Each is a small branch of its own.
 
