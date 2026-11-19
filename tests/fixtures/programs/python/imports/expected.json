@@ -1,0 +1,31 @@
+{
+  "ir_version": "0.1.0",
+  "source": "tests/fixtures/programs/python/imports",
+  "nodes": [
+    {"id": "py:main", "kind": "module", "name": "main", "frontend": "python"},
+    {"id": "py:shop", "kind": "module", "name": "shop", "frontend": "python"},
+    {"id": "py:shop.pricing", "kind": "module", "name": "pricing", "frontend": "python"},
+    {"id": "py:shop.orders", "kind": "module", "name": "orders", "frontend": "python"},
+    {"id": "py:shop.pricing.price_with_tax", "kind": "function", "name": "price_with_tax", "frontend": "python"},
+    {"id": "py:shop.pricing.discount", "kind": "function", "name": "discount", "frontend": "python"},
+    {"id": "py:shop.orders.place_order", "kind": "function", "name": "place_order", "frontend": "python"},
+    {"id": "py:main.run", "kind": "function", "name": "run", "frontend": "python"}
+  ],
+  "edges": [
+    {"from": "py:shop", "to": "py:shop.pricing", "kind": "defines"},
+    {"from": "py:shop", "to": "py:shop.orders", "kind": "defines"},
+    {"from": "py:shop.pricing", "to": "py:shop.pricing.price_with_tax", "kind": "defines"},
+    {"from": "py:shop.pricing", "to": "py:shop.pricing.discount", "kind": "defines"},
+    {"from": "py:shop.orders", "to": "py:shop.orders.place_order", "kind": "defines"},
+    {"from": "py:main", "to": "py:main.run", "kind": "defines"},
+    {"from": "py:shop", "to": "py:shop.orders", "kind": "imports"},
+    {"from": "py:shop.orders", "to": "py:shop.pricing", "kind": "imports"},
+    {"from": "py:main", "to": "py:shop", "kind": "imports"},
+    {"from": "py:main", "to": "py:shop.orders", "kind": "imports"},
+    {"from": "py:shop.orders.place_order", "to": "py:shop.pricing.discount", "kind": "calls"},
+    {"from": "py:shop.orders.place_order", "to": "py:shop.pricing.price_with_tax", "kind": "calls"},
+    {"from": "py:main.run", "to": "py:shop.orders.place_order", "kind": "calls"},
+    {"from": "py:main", "to": "py:main.run", "kind": "calls"},
+    {"from": "py:main", "to": "py:shop.orders.place_order", "kind": "calls"}
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "ir_version": "0.1.0",
+  "source": "tests/fixtures/programs/python/basic_calls",
+  "nodes": [
+    {"id": "py:app", "kind": "module", "name": "app", "frontend": "python"},
+    {"id": "py:app.parse", "kind": "function", "name": "parse", "frontend": "python"},
+    {"id": "py:app.total", "kind": "function", "name": "total", "frontend": "python"},
+    {"id": "py:app.factorial", "kind": "function", "name": "factorial", "frontend": "python"},
+    {"id": "py:app.report", "kind": "function", "name": "report", "frontend": "python"},
+    {"id": "py:app.unused", "kind": "function", "name": "unused", "frontend": "python"}
+  ],
+  "edges": [
+    {"from": "py:app", "to": "py:app.parse", "kind": "defines"},
+    {"from": "py:app", "to": "py:app.total", "kind": "defines"},
+    {"from": "py:app", "to": "py:app.factorial", "kind": "defines"},
+    {"from": "py:app", "to": "py:app.report", "kind": "defines"},
+    {"from": "py:app", "to": "py:app.unused", "kind": "defines"},
+    {"from": "py:app.report", "to": "py:app.parse", "kind": "calls"},
+    {"from": "py:app.report", "to": "py:app.total", "kind": "calls"},
+    {"from": "py:app.report", "to": "py:app.factorial", "kind": "calls"},
+    {"from": "py:app.factorial", "to": "py:app.factorial", "kind": "calls"},
+    {"from": "py:app.unused", "to": "py:app.report", "kind": "calls"},
+    {"from": "py:app", "to": "py:app.report", "kind": "calls"}
+  ]
+}

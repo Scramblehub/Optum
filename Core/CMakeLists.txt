@@ -7,6 +7,7 @@ add_library(optum_core
   ${CMAKE_CURRENT_BINARY_DIR}/version.cpp
   src/ir.cpp
   src/ir_json.cpp
+  src/score.cpp
 )
 target_include_directories(optum_core PUBLIC include)
 target_link_libraries(optum_core PUBLIC nlohmann_json::nlohmann_json)

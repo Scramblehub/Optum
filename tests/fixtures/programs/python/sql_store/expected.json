@@ -1,0 +1,33 @@
+{
+  "ir_version": "0.1.0",
+  "source": "tests/fixtures/programs/python/sql_store",
+  "nodes": [
+    {"id": "py:store", "kind": "module", "name": "store", "frontend": "python"},
+    {"id": "py:store.connect", "kind": "function", "name": "connect", "frontend": "python"},
+    {"id": "py:store.add_customer", "kind": "function", "name": "add_customer", "frontend": "python"},
+    {"id": "py:store.add_order", "kind": "function", "name": "add_order", "frontend": "python"},
+    {"id": "py:store.revenue_by_customer", "kind": "function", "name": "revenue_by_customer", "frontend": "python"},
+    {"id": "py:store.delete_customer", "kind": "function", "name": "delete_customer", "frontend": "python"},
+    {"id": "sql:customers", "kind": "store", "name": "sql:customers", "frontend": "python"},
+    {"id": "sql:orders", "kind": "store", "name": "sql:orders", "frontend": "python"}
+  ],
+  "edges": [
+    {"from": "py:store", "to": "py:store.connect", "kind": "defines"},
+    {"from": "py:store", "to": "py:store.add_customer", "kind": "defines"},
+    {"from": "py:store", "to": "py:store.add_order", "kind": "defines"},
+    {"from": "py:store", "to": "py:store.revenue_by_customer", "kind": "defines"},
+    {"from": "py:store", "to": "py:store.delete_customer", "kind": "defines"},
+    {"from": "py:store.connect", "to": "sql:customers", "kind": "writes"},
+    {"from": "py:store.connect", "to": "sql:orders", "kind": "writes"},
+    {"from": "py:store.add_customer", "to": "sql:customers", "kind": "writes"},
+    {"from": "py:store.add_order", "to": "sql:orders", "kind": "writes"},
+    {"from": "py:store.revenue_by_customer", "to": "sql:orders", "kind": "reads"},
+    {"from": "py:store.revenue_by_customer", "to": "sql:customers", "kind": "reads"},
+    {"from": "py:store.delete_customer", "to": "sql:orders", "kind": "writes"},
+    {"from": "py:store.delete_customer", "to": "sql:customers", "kind": "writes"},
+    {"from": "py:store", "to": "py:store.connect", "kind": "calls"},
+    {"from": "py:store", "to": "py:store.add_customer", "kind": "calls"},
+    {"from": "py:store", "to": "py:store.add_order", "kind": "calls"},
+    {"from": "py:store", "to": "py:store.revenue_by_customer", "kind": "calls"}
+  ]
+}
