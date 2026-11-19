@@ -233,16 +233,17 @@ if(Python3_FOUND AND GCC)
   set(SCORE_BIN ${Python3_EXECUTABLE} ${TOOLS}/score_binary.py --optum $<TARGET_FILE:optum> --corpus ${CORPUS_DIR})
   add_test(NAME binary_symbols_and_stripped
            COMMAND ${SCORE_BIN} --forms symbols,stripped --min-func-precision 1 --min-func-recall 1
-                   --min-call-precision 0.99 --min-call-recall 0.99)
+                   --min-call-precision 0.99 --min-call-recall 0.99 --require-reach)
   add_test(NAME binary_bare
            COMMAND ${SCORE_BIN} --forms bare --min-func-precision 0.95 --min-func-recall 0.90
-                   --min-call-precision 0.95 --min-call-recall 0.85)
+                   --min-call-precision 0.95 --min-call-recall 0.85 --require-reach)
   # Binaries in a repo are untrusted input: mutated ones must never crash the frontend.
   add_test(NAME binary_fuzz
            COMMAND ${Python3_EXECUTABLE} ${TOOLS}/fuzz_elf.py --optum $<TARGET_FILE:optum> --cases 150
                    --seed-binary ${CORPUS_DIR}/samples/O2/symbols/multi
                    --seed-binary ${CORPUS_DIR}/cJSON/O2/symbols/libcjson.so
-                   --seed-binary ${CORPUS_DIR}/zlib/O0/bare/minigzip)
+                   --seed-binary ${CORPUS_DIR}/zlib/O0/bare/minigzip
+                   --seed-binary ${CORPUS_DIR}/glue/O0/symbols/http_glue)
   set_tests_properties(corpus_answer_keys corpus_symbols_baseline corpus_eh_frame_baseline
                        binary_symbols_and_stripped binary_bare binary_fuzz PROPERTIES
                        FIXTURES_REQUIRED corpus)

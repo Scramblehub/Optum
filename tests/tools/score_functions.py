@@ -84,6 +84,8 @@ def main():
     rows = collections.defaultdict(lambda: collections.Counter())
     total = collections.Counter()
     for e in manifest:
+        if e.get("stub"):
+            continue  # stub libraries (tests/corpus/stubs) are scaffolding for other binaries
         t = json.load(open(os.path.join(args.corpus, e["truth"])))
         binary = os.path.join(args.corpus, t["paths"][form])
         if args.baseline == "eh_frame":

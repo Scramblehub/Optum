@@ -20,11 +20,19 @@ gcc, `-g -fPIC`.
 | Project | Source | Binaries |
 |---|---|---|
 | samples | `tests/fixtures/programs/c` | `basic`, `multi` |
+| glue | `tests/fixtures/programs/c/http_glue` + [stubs](stubs) | `http_glue`, linked against stub `libcurl.so.4` and `libsqlite3.so.0` |
 | zlib v1.3.1 | submodule `External_Libraries/corpus/zlib` | `libz.so`, `minigzip`, `example` |
 | cJSON v1.7.18 | submodule `External_Libraries/corpus/cJSON` | `libcjson.so`, `cjson_test` |
 | sqlite 3.54.1 (optional) | downloaded, SHA3-256 pinned | `libsqlite3.so` |
 
-That's 35 binaries without sqlite.
+That's 50 binaries without sqlite (15 of them the glue project's, stubs included).
+
+**Stubs** ([stubs/](stubs)): stand-in headers and shared libraries for libcurl and sqlite, so glue
+code builds the same everywhere without their development files. The headers use the real ABI
+values (`CURLOPT_URL` = 10002, …) and the libraries the real sonames, so the machine code and the
+imports are what the real ones produce. Stub libraries are marked `stub` and left out of the
+baselines. A binary whose entry names `expected` gets `source_graph` in its answer key: the
+hand-checked source graph whose APIs and tables it must reach.
 
 ## The four forms
 

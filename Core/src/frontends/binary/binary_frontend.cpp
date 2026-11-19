@@ -21,7 +21,10 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "../common.hpp"
 #include "optum/elf.hpp"
+#include "optum/http.hpp"
+#include "optum/sql.hpp"
 
 namespace optum {
 namespace {
@@ -149,6 +152,340 @@ class Disassembler {
   }
 };
 
+// ===================================================================== lifting
+//
+// Just enough to read the arguments of library calls: values in registers and stack slots,
+// followed through one function in address order (control flow is ignored, which is right for
+// the straight-line setup code that calls libraries). Values are constants, addresses (of string
+// literals, or of pointers stored in data), and stack addresses (local buffers).
+
+struct Val {
+  enum class K : std::uint8_t { Unknown, Imm, Addr, Stack };
+  K k = K::Unknown;
+  std::uint64_t v = 0;        // Imm: the value. Addr: the address. Stack: the offset (as signed)
+  unsigned base = 0;          // Stack: the base register (rsp or rbp)
+};
+
+// The 64-bit register a register name is part of (esi -> rsi); X86_REG_INVALID if not tracked.
+unsigned canon(unsigned r) {
+  switch (r) {
+    case X86_REG_RAX: case X86_REG_EAX: case X86_REG_AX: case X86_REG_AL: return X86_REG_RAX;
+    case X86_REG_RBX: case X86_REG_EBX: case X86_REG_BX: case X86_REG_BL: return X86_REG_RBX;
+    case X86_REG_RCX: case X86_REG_ECX: case X86_REG_CX: case X86_REG_CL: return X86_REG_RCX;
+    case X86_REG_RDX: case X86_REG_EDX: case X86_REG_DX: case X86_REG_DL: return X86_REG_RDX;
+    case X86_REG_RSI: case X86_REG_ESI: case X86_REG_SI: case X86_REG_SIL: return X86_REG_RSI;
+    case X86_REG_RDI: case X86_REG_EDI: case X86_REG_DI: case X86_REG_DIL: return X86_REG_RDI;
+    case X86_REG_RBP: case X86_REG_EBP: return X86_REG_RBP;
+    case X86_REG_RSP: case X86_REG_ESP: return X86_REG_RSP;
+    case X86_REG_R8: case X86_REG_R8D: case X86_REG_R8W: case X86_REG_R8B: return X86_REG_R8;
+    case X86_REG_R9: case X86_REG_R9D: case X86_REG_R9W: case X86_REG_R9B: return X86_REG_R9;
+    case X86_REG_R10: case X86_REG_R10D: case X86_REG_R10W: case X86_REG_R10B: return X86_REG_R10;
+    case X86_REG_R11: case X86_REG_R11D: case X86_REG_R11W: case X86_REG_R11B: return X86_REG_R11;
+    case X86_REG_R12: case X86_REG_R12D: case X86_REG_R12W: case X86_REG_R12B: return X86_REG_R12;
+    case X86_REG_R13: case X86_REG_R13D: case X86_REG_R13W: case X86_REG_R13B: return X86_REG_R13;
+    case X86_REG_R14: case X86_REG_R14D: case X86_REG_R14W: case X86_REG_R14B: return X86_REG_R14;
+    case X86_REG_R15: case X86_REG_R15D: case X86_REG_R15W: case X86_REG_R15B: return X86_REG_R15;
+    default: return X86_REG_INVALID;
+  }
+}
+
+constexpr unsigned kArgRegs[6] = {X86_REG_RDI, X86_REG_RSI, X86_REG_RDX, X86_REG_RCX, X86_REG_R8, X86_REG_R9};
+
+// A library call with its first six arguments, as far as they could be followed.
+struct LibCall {
+  std::uint64_t addr = 0;
+  std::string name;
+  Val args[6];
+  std::optional<std::string> str[6];  // the argument as text, where it points at one
+};
+
+// printf conversions (%s, %d, %08lx...) become "{}"; "%%" is a percent sign.
+std::string printf_template(const std::string& fmt) {
+  std::string out;
+  for (std::size_t i = 0; i < fmt.size(); ++i) {
+    if (fmt[i] != '%') {
+      out += fmt[i];
+      continue;
+    }
+    if (i + 1 < fmt.size() && fmt[i + 1] == '%') {
+      out += '%';
+      ++i;
+      continue;
+    }
+    std::size_t j = i + 1;
+    while (j < fmt.size() && std::strchr("-+ #0123456789.*hlLqjzt", fmt[j])) ++j;
+    out += "{}";
+    i = j;
+  }
+  return out;
+}
+
+class Lifter {
+ public:
+  Lifter(const elf::File& f, const std::map<std::uint64_t, std::string>& plt) : f_(f), plt_(plt) {
+    cs_open(CS_ARCH_X86, CS_MODE_64, &h_);
+    cs_option(h_, CS_OPT_DETAIL, CS_OPT_ON);
+  }
+  ~Lifter() { cs_close(&h_); }
+  Lifter(const Lifter&) = delete;
+  Lifter& operator=(const Lifter&) = delete;
+
+  std::vector<LibCall> run(std::uint64_t start, std::uint64_t end) {
+    regs_.clear();
+    slots_.clear();
+    buffers_.clear();
+    calls_.clear();
+    const elf::Section* sec = f_.section_at(start);
+    if (!sec || end <= start) return {};
+    const auto bytes = f_.bytes(*sec);
+    const std::uint64_t off = start - sec->addr;
+    if (off >= bytes.size()) return {};
+    const std::uint8_t* p = bytes.data() + off;
+    std::size_t left = static_cast<std::size_t>(std::min<std::uint64_t>(end - start, bytes.size() - off));
+    std::uint64_t a = start;
+    cs_insn* insn = cs_malloc(h_);
+    while (left > 0 && cs_disasm_iter(h_, &p, &left, &a, insn)) step(*insn);
+    cs_free(insn, 1);
+    return std::move(calls_);
+  }
+
+ private:
+  const elf::File& f_;
+  const std::map<std::uint64_t, std::string>& plt_;
+  csh h_ = 0;
+  std::map<unsigned, Val> regs_;
+  std::map<std::pair<unsigned, std::int64_t>, Val> slots_;            // stack slots
+  std::map<std::pair<unsigned, std::int64_t>, std::string> buffers_;  // stack buffers holding text
+  std::vector<LibCall> calls_;
+
+  Val reg(unsigned r) const {
+    if (r == X86_REG_RSP || r == X86_REG_RBP) return {Val::K::Stack, 0, r};
+    auto it = regs_.find(r);
+    return it == regs_.end() ? Val{} : it->second;
+  }
+
+  // A memory operand as a stack slot (base rsp/rbp, no index), if it is one.
+  static std::optional<std::pair<unsigned, std::int64_t>> slot(const cs_x86_op& op) {
+    const unsigned b = canon(op.mem.base);
+    if (op.type != X86_OP_MEM || op.mem.index != X86_REG_INVALID || (b != X86_REG_RSP && b != X86_REG_RBP)) {
+      return std::nullopt;
+    }
+    return std::make_pair(b, op.mem.disp);
+  }
+
+  std::optional<std::string> text_of(const Val& v) const {
+    if (v.k == Val::K::Addr) return f_.string_at(v.v);
+    if (v.k == Val::K::Stack) {
+      if (auto it = buffers_.find({v.base, static_cast<std::int64_t>(v.v)}); it != buffers_.end()) return it->second;
+    }
+    return std::nullopt;
+  }
+
+  std::optional<std::string> import_of(const cs_insn& i) const {
+    const cs_x86& x = i.detail->x86;
+    if (x.op_count != 1) return std::nullopt;
+    const cs_x86_op& op = x.operands[0];
+    if (op.type == X86_OP_IMM) {
+      if (auto it = plt_.find(static_cast<std::uint64_t>(op.imm)); it != plt_.end()) return it->second;
+    } else if (op.type == X86_OP_MEM && op.mem.base == X86_REG_RIP && op.mem.index == X86_REG_INVALID) {
+      const std::uint64_t slot_addr = i.address + i.size + static_cast<std::uint64_t>(op.mem.disp);
+      if (auto it = f_.got_imports.find(slot_addr); it != f_.got_imports.end()) return it->second;
+    }
+    return std::nullopt;
+  }
+
+  void on_library_call(std::uint64_t addr, const std::string& name) {
+    LibCall c;
+    c.addr = addr;
+    c.name = name;
+    for (int k = 0; k < 6; ++k) {
+      c.args[k] = reg(kArgRegs[k]);
+      c.str[k] = text_of(c.args[k]);
+    }
+    // Writers of local buffers: what the buffer holds afterwards (printf formats as templates).
+    auto into = [&](int buf, int src, bool format) {
+      if (c.args[buf].k != Val::K::Stack || !c.str[src]) return;
+      buffers_[{c.args[buf].base, static_cast<std::int64_t>(c.args[buf].v)}] = format ? printf_template(*c.str[src]) : *c.str[src];
+    };
+    if (name == "snprintf") into(0, 2, true);
+    else if (name == "sprintf") into(0, 1, true);
+    else if (name == "__snprintf_chk") into(0, 4, true);  // _FORTIFY_SOURCE versions
+    else if (name == "__sprintf_chk") into(0, 3, true);
+    else if (name == "strcpy" || name == "__strcpy_chk" || name == "stpcpy") into(0, 1, false);
+    calls_.push_back(std::move(c));
+  }
+
+  void clobber_after_call() {
+    for (unsigned r : {X86_REG_RAX, X86_REG_RCX, X86_REG_RDX, X86_REG_RSI, X86_REG_RDI, X86_REG_R8, X86_REG_R9,
+                       X86_REG_R10, X86_REG_R11}) {
+      regs_.erase(r);
+    }
+  }
+
+  void step(const cs_insn& i) {
+    const cs_x86& x = i.detail->x86;
+    if (i.id == X86_INS_CALL || i.id == X86_INS_JMP) {
+      if (auto name = import_of(i)) on_library_call(i.address, *name);
+      if (i.id == X86_INS_CALL) clobber_after_call();
+      return;
+    }
+    if ((i.id == X86_INS_MOV || i.id == X86_INS_MOVABS) && x.op_count == 2) {
+      const cs_x86_op &dst = x.operands[0], &src = x.operands[1];
+      if (dst.type == X86_OP_REG) {
+        const unsigned d = canon(dst.reg);
+        if (d == X86_REG_INVALID || d == X86_REG_RSP) return;
+        if (src.type == X86_OP_IMM) regs_[d] = {Val::K::Imm, static_cast<std::uint64_t>(src.imm), 0};
+        else if (src.type == X86_OP_REG) regs_[d] = reg(canon(src.reg));
+        else if (auto sl = slot(src)) regs_[d] = slots_.count(*sl) ? slots_[*sl] : Val{};
+        else if (src.type == X86_OP_MEM && src.mem.base == X86_REG_RIP && src.mem.index == X86_REG_INVALID && dst.size == 8) {
+          // A pointer stored in data (static const char *URL = "..."): load what it holds.
+          const auto ptr = f_.pointer_at(i.address + i.size + static_cast<std::uint64_t>(src.mem.disp));
+          regs_[d] = ptr ? Val{Val::K::Addr, *ptr, 0} : Val{};
+        } else {
+          regs_.erase(d);
+        }
+        return;
+      }
+      if (auto sl = slot(dst)) {
+        if (src.type == X86_OP_REG) slots_[*sl] = reg(canon(src.reg));
+        else if (src.type == X86_OP_IMM) slots_[*sl] = {Val::K::Imm, static_cast<std::uint64_t>(src.imm), 0};
+        else slots_.erase(*sl);
+      }
+      return;
+    }
+    if (i.id == X86_INS_LEA && x.op_count == 2 && x.operands[0].type == X86_OP_REG) {
+      const unsigned d = canon(x.operands[0].reg);
+      const cs_x86_op& m = x.operands[1];
+      if (d == X86_REG_INVALID || d == X86_REG_RSP) return;
+      if (m.mem.base == X86_REG_RIP && m.mem.index == X86_REG_INVALID) {
+        regs_[d] = {Val::K::Addr, i.address + i.size + static_cast<std::uint64_t>(m.mem.disp), 0};
+      } else if (auto sl = slot(m)) {
+        regs_[d] = {Val::K::Stack, static_cast<std::uint64_t>(sl->second), sl->first};
+      } else {
+        regs_.erase(d);
+      }
+      return;
+    }
+    if (i.id == X86_INS_XOR && x.op_count == 2 && x.operands[0].type == X86_OP_REG && x.operands[1].type == X86_OP_REG &&
+        canon(x.operands[0].reg) == canon(x.operands[1].reg)) {
+      regs_[canon(x.operands[0].reg)] = {Val::K::Imm, 0, 0};
+      return;
+    }
+    // Anything else that writes a register makes it unknown.
+    for (std::uint8_t k = 0; k < x.op_count; ++k) {
+      const cs_x86_op& op = x.operands[k];
+      if (op.type == X86_OP_REG && (op.access & CS_AC_WRITE)) regs_.erase(canon(op.reg));
+      if (auto sl = slot(op); sl && (op.access & CS_AC_WRITE)) slots_.erase(*sl);
+    }
+  }
+};
+
+// What a function's library calls reach: HTTP endpoints (libcurl) and SQL tables.
+struct Reach {
+  std::string node_id;  // http:... or sql:...
+  EdgeKind kind = EdgeKind::Reads;
+  std::string method;   // HTTP only
+  std::uint64_t addr = 0;
+};
+
+std::vector<Reach> reach_of(const std::vector<LibCall>& calls) {
+  std::vector<Reach> out;
+  // libcurl: each curl_easy_perform uses the URL and the method options set since the previous
+  // one. Grouping by perform (not by function) keeps requests apart when gcc inlines several
+  // functions into one.
+  std::optional<std::string> url;
+  std::uint64_t url_addr = 0;
+  std::string method;
+  auto flush = [&] {
+    if (url) {
+      const std::string id = http_node_id(*url);
+      const std::string m = method.empty() ? "GET" : method;
+      if (!id.empty()) {
+        out.push_back({id, (m == "GET" || m == "HEAD" || m == "OPTIONS") ? EdgeKind::Reads : EdgeKind::SendsTo, m, url_addr});
+      }
+    }
+    url.reset();
+    method.clear();
+  };
+  for (const LibCall& c : calls) {
+    if (c.name == "curl_easy_setopt" && c.args[1].k == Val::K::Imm) {
+      switch (static_cast<std::uint32_t>(c.args[1].v)) {
+        case 10002: url = c.str[2]; url_addr = c.addr; break;                    // CURLOPT_URL
+        case 47: case 10015: case 10165: case 10269: if (method.empty()) method = "POST"; break;
+        case 46: case 54: method = "PUT"; break;                                // UPLOAD, PUT
+        case 44: method = "HEAD"; break;                                        // NOBODY
+        case 10036: if (c.str[2] && c.str[2]->find("{}") == std::string::npos) method = frontends::to_upper(*c.str[2]); break;
+        default: break;
+      }
+    } else if (c.name == "curl_easy_perform") {
+      flush();
+    }
+    static const std::unordered_map<std::string, int> kSql = {
+        {"sqlite3_exec", 1}, {"sqlite3_prepare", 1}, {"sqlite3_prepare_v2", 1}, {"sqlite3_prepare_v3", 1},
+        {"PQexec", 1},       {"PQexecParams", 1},    {"PQprepare", 2},          {"PQsendQuery", 1},
+        {"mysql_query", 1},  {"mysql_real_query", 1}};
+    if (auto it = kSql.find(c.name); it != kSql.end() && c.str[it->second]) {
+      const SqlTables t = sql_tables(*c.str[it->second]);
+      for (const auto& r : t.reads) out.push_back({sql_store_id(r), EdgeKind::Reads, "", c.addr});
+      for (const auto& w : t.writes) out.push_back({sql_store_id(w), EdgeKind::Writes, "", c.addr});
+    }
+  }
+  flush();
+  return out;
+}
+
+// Which library exports a function, for imports without a symbol version (sqlite, most non-glibc
+// libraries). Looks for each DT_NEEDED library like the dynamic linker would: the RUNPATH/RPATH
+// entries ($ORIGIN = the binary's directory), then the system library directories. Each library's
+// exports are read once per run.
+class LibraryIndex {
+ public:
+  std::string library_of(const std::string& symbol, const elf::File& f) {
+    for (const std::string& lib : f.needed) {
+      const auto* exports = exports_of(lib, f);
+      if (exports && exports->count(symbol)) return lib;
+    }
+    return "";
+  }
+
+ private:
+  std::map<std::string, std::optional<std::unordered_set<std::string>>> cache_;  // path -> exports
+
+  const std::unordered_set<std::string>* exports_of(const std::string& lib, const elf::File& f) {
+    const std::string dir = fs::absolute(f.path).parent_path().string();
+    std::vector<std::string> search;
+    for (std::string p : f.runpath) {
+      if (auto at = p.find("$ORIGIN"); at != std::string::npos) p.replace(at, 7, dir);
+      search.push_back(p);
+    }
+    for (const char* sys : {"/lib/x86_64-linux-gnu", "/usr/lib/x86_64-linux-gnu", "/lib64", "/usr/lib64", "/lib",
+                            "/usr/lib", "/usr/local/lib"}) {
+      search.emplace_back(sys);
+    }
+    for (const std::string& d : search) {
+      const fs::path candidate = fs::path(d) / lib;
+      std::error_code ec;
+      if (!fs::is_regular_file(candidate, ec)) continue;
+      const std::string key = fs::weakly_canonical(candidate, ec).string();
+      auto [it, inserted] = cache_.try_emplace(key);
+      if (inserted) {
+        try {
+          const elf::File l = elf::read(candidate);
+          std::unordered_set<std::string> names;
+          for (const auto& s : l.dynsym) {
+            if (s.defined() && (s.is_function() || s.type == 10)) names.insert(s.name);  // FUNC, GNU_IFUNC
+          }
+          it->second = std::move(names);
+        } catch (const IrError&) {
+          it->second.reset();  // not a readable library: keep looking
+        }
+      }
+      if (it->second) return &*it->second;
+    }
+    return nullptr;
+  }
+};
+
 struct Func {
   std::uint64_t start = 0, end = 0;
   std::string name;  // from a symbol, if any
@@ -167,7 +504,7 @@ class BinaryAnalysis {
     find_functions();
   }
 
-  void emit(Graph& g, BinaryStats& stats) const;
+  void emit(Graph& g, BinaryStats& stats, LibraryIndex& libs) const;
 
  private:
   const elf::File& f_;
@@ -402,7 +739,7 @@ std::string hex(std::uint64_t v) {
   return buf;
 }
 
-void BinaryAnalysis::emit(Graph& g, BinaryStats& stats) const {
+void BinaryAnalysis::emit(Graph& g, BinaryStats& stats, LibraryIndex& libs) const {
   const std::string bin = fs::path(rel_).filename().string();
   const std::string mod_id = "bin:" + bin;
   Node mod;
@@ -452,10 +789,13 @@ void BinaryAnalysis::emit(Graph& g, BinaryStats& stats) const {
   }
 
   // Imports: the libraries named in DT_NEEDED, and the functions called from them.
+  // The library an import comes from: its symbol version names it; else the library among
+  // DT_NEEDED that exports it (looked up on this machine); else the only DT_NEEDED; else "?".
   auto library_of = [&](const std::string& fn) -> std::string {
     for (const auto& s : f_.dynsym) {
       if (s.name == fn && !s.defined() && !s.library.empty()) return s.library;
     }
+    if (std::string lib = libs.library_of(fn, f_); !lib.empty()) return lib;
     return f_.needed.size() == 1 ? f_.needed[0] : "?";
   };
   for (const std::string& lib : f_.needed) {
@@ -525,6 +865,37 @@ void BinaryAnalysis::emit(Graph& g, BinaryStats& stats) const {
     e.attrs = std::move(attrs);
     g.add_edge(std::move(e));
   }
+  // APIs and tables reached: lift the functions that call libraries we understand.
+  static const std::unordered_set<std::string> kGlue = {
+      "curl_easy_setopt", "curl_easy_perform", "sqlite3_exec", "sqlite3_prepare", "sqlite3_prepare_v2",
+      "sqlite3_prepare_v3", "PQexec", "PQexecParams", "PQprepare", "PQsendQuery", "mysql_query", "mysql_real_query"};
+  std::set<std::uint64_t> glue_funcs;
+  for (const Insn& i : code_) {
+    if (i.kind != Kind::Call && i.kind != Kind::Jump && !i.rip_slot) continue;
+    if (auto imp = import_at(i); imp && kGlue.count(*imp)) {
+      if (const std::uint64_t fn = func_of(i.addr)) glue_funcs.insert(fn);
+    }
+  }
+  if (!glue_funcs.empty()) {
+    Lifter lifter(f_, plt_);
+    for (std::uint64_t fn : glue_funcs) {
+      for (const Reach& r : reach_of(lifter.run(fn, funcs_.at(fn).end))) {
+        if (!g.find(r.node_id)) {
+          if (r.node_id.starts_with("http:")) g.add_node(frontends::http_external_node(r.node_id, "binary"));
+          else g.add_node(frontends::sql_store_node(r.node_id, r.node_id.substr(4), "binary"));
+        }
+        Edge e;
+        e.from = *g.find(ids.at(fn));
+        e.to = *g.find(r.node_id);
+        e.kind = r.kind;
+        e.confidence = r.node_id.find("{}") == std::string::npos ? Confidence::Exact : Confidence::Inferred;
+        e.frontend = "binary";
+        e.loc = SourceLoc{rel_, 0, 0, r.addr};
+        if (!r.method.empty()) e.attrs = {{"method", r.method}};
+        g.add_edge(std::move(e));
+      }
+    }
+  }
   stats.functions += funcs_.size();
   stats.instructions += code_.size();
 }
@@ -537,6 +908,7 @@ Graph extract_binary_files(const fs::path& root, const std::vector<fs::path>& fi
   g.source = root.string();
   BinaryStats local;
   BinaryStats& st = stats ? *stats : local;
+  LibraryIndex libs;
   for (const auto& rel : files) {
     const fs::path p = root / rel;
     if (!fs::is_regular_file(p) || !elf::is_elf(p)) continue;
@@ -553,7 +925,7 @@ Graph extract_binary_files(const fs::path& root, const std::vector<fs::path>& fi
       }
       BinaryAnalysis a(f, rel.generic_string());
       a.run();
-      a.emit(g, st);
+      a.emit(g, st, libs);
       ++st.files;
     } catch (const IrError& e) {
       ++st.skipped;

@@ -78,7 +78,14 @@ def sources_of(project, binary):
 
 
 def obj_stem(src):
+    if src.startswith("@repo/"):
+        return "repo__" + os.path.basename(src)[:-2]
     return src[:-2].replace("/", "__")
+
+
+def repo_path(x):
+    """'@repo/...' means the repo root (stub headers and libraries shared by projects)."""
+    return x.replace("@repo/", REPO + "/")
 
 
 # ------------------------------------------------------------------ answer keys
@@ -207,20 +214,25 @@ def build_level(project, root, opt, out):
     base = os.path.join(out, project["name"], opt_name(opt))
     objdir = os.path.join(base, "obj")
     os.makedirs(objdir, exist_ok=True)
-    cflags = [opt, "-g", "-w", "-fPIC", "-fcallgraph-info", f"-ffile-prefix-map={root}=."] + project.get("cflags", [])
+    # GCC applies the last matching prefix map: the project's own (more specific) goes last.
+    cflags = [opt, "-g", "-w", "-fPIC", "-fcallgraph-info", f"-ffile-prefix-map={REPO}=@repo",
+              f"-ffile-prefix-map={root}=."] + [repo_path(c) for c in project.get("cflags", [])]
     srcs = sorted({s for b in project["binaries"] for s in sources_of(project, b)})
     for src in srcs:
         obj = os.path.join(objdir, obj_stem(src) + ".o")
-        run(["gcc", "-c"] + cflags + ["-dumpdir", objdir + "/", "-o", obj, src], cwd=root)
+        run(["gcc", "-c"] + cflags + ["-dumpdir", objdir + "/", "-o", obj, repo_path(src)], cwd=root)
 
     entries = []
+    built = {}  # binary name -> its debug path, for '@bin:NAME' in later binaries' libs
     for b in project["binaries"]:
         objs = [os.path.join(objdir, obj_stem(s) + ".o") for s in sources_of(project, b)]
         paths = {v: os.path.join(base, v, b["name"]) for v in ("debug", "symbols", "stripped", "bare")}
         for p in paths.values():
             os.makedirs(os.path.dirname(p), exist_ok=True)
         link = ["gcc", opt, "-g"] + (["-shared"] if b["kind"] == "shared" else []) + objs + ["-o", paths["debug"]]
-        run(link + b.get("libs", []))
+        libs = [built[x[5:]] if x.startswith("@bin:") else x for x in b.get("libs", [])]
+        run(link + libs)
+        built[b["name"]] = paths["debug"]
         run(["strip", "--strip-debug", "-o", paths["symbols"], paths["debug"]])
         run(["strip", "--strip-all", "-o", paths["stripped"], paths["debug"]])
         run(["objcopy", "--remove-section=.eh_frame", "--remove-section=.eh_frame_hdr", paths["stripped"], paths["bare"]])
@@ -238,11 +250,14 @@ def build_level(project, root, opt, out):
             "indirect_call_sites": indirect,
             "imports": imports_of(paths["debug"]),
         }
+        if "expected" in b:  # the hand-checked source graph (for APIs and tables reached)
+            truth["source_graph"] = os.path.relpath(os.path.join(root, b["expected"]), REPO)
         tpath = os.path.join(base, "truth", b["name"] + ".json")
         os.makedirs(os.path.dirname(tpath), exist_ok=True)
         with open(tpath, "w") as f:
             json.dump(truth, f, indent=1)
         entries.append({"project": project["name"], "binary": b["name"], "opt": opt, "kind": b["kind"],
+                        "stub": bool(b.get("stub")),
                         "truth": os.path.relpath(tpath, out), "functions": len(functions),
                         "project_functions": sum(1 for x in functions if x["origin"] == "project"),
                         "calls": len(calls), "indirect_call_sites": indirect})
@@ -287,7 +302,7 @@ def check(args):
         t = json.load(open(os.path.join(out, e["truth"])))
         where = f"{e['project']}/{e['opt']}/{e['binary']}"
         proj = [f for f in t["functions"] if f["origin"] == "project"]
-        if not proj:
+        if not proj and not e.get("stub"):  # stub libraries (tests/corpus/stubs) have no project code
             problems.append(f"{where}: no project functions")
         if any(not f["source_id"] for f in proj):
             problems.append(f"{where}: project functions without a source id")
