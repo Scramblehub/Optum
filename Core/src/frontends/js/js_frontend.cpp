@@ -1338,6 +1338,9 @@ class Linker {
       for (const auto& [tbl, cols] : t.columns) {
         if (tbl == table) attrs["columns"] = cols;
       }
+      for (const auto& [tbl, keys] : t.keys) {
+        if (tbl == table) attrs["keys"] = keys;  // declared PRIMARY KEY / UNIQUE: identity keys
+      }
       emit(id(cs.attr), std::move(to), kind, Confidence::Exact, cs.line, std::move(attrs), std::move(n));
     };
     for (const auto& r : t.reads) store(r, EdgeKind::Reads);

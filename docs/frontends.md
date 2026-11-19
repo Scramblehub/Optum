@@ -35,7 +35,8 @@ change in the same commit.
 - **For the same-entity analysis** ([diagnose.md](diagnose.md#the-same-data-in-several-places)):
   `attrs.fields` on Python and JS class nodes (annotated class attributes, attributes set on
   `self`/`this`, JS class fields; 2 or more), `attrs.columns` on SQL `reads`/`writes` edges (the
-  columns the statement names for that table), and `attrs.fields` on HTTP `sends_to` edges (the
+  columns the statement names for that table) and `attrs.keys` (columns `CREATE TABLE` declares a
+  one-column `PRIMARY KEY` or `UNIQUE`), and `attrs.fields` on HTTP `sends_to` edges (the
   keys of the JSON or form body).
 
 ## Python

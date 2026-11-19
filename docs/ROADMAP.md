@@ -108,6 +108,14 @@ automatic rewrite merges with all tests still passing.
 
 ### Phase 3: Unify (weeks 13–16, can stretch to 24)
 
+**Requirements carried from Phase 2:**
+- **Records match by identity, never by coincidence.** Merging data across tools (the CRM's
+  customers and the shop's) links records by a shared id or key (email, external id, a crosswalk
+  of each tool's ids), or a temporary id assigned while comparing; two customers with the same name
+  or the same order total are not the same customer.
+- **Regulated forms are never merged or rewritten:** tax, legal and medical records stay in their
+  required form (see the same-entity rules in [diagnose.md](diagnose.md#the-same-data-in-several-places)).
+
 This is the "test company" from section 11 of the concept doc, kept small, and modeled on a real business from the interviews (see [0004](decisions/0004-measuring-graph-accuracy.md)): the same kinds of tools and the same glue, swapped for open-source stand-ins.
 
 | Branch | Job | Size |

@@ -98,3 +98,12 @@ TEST_CASE("sql: SQLite's INSERT OR REPLACE names the table after INTO") {
   REQUIRE(t.columns == std::vector<std::pair<std::string, std::vector<std::string>>>{{"bans", {"jail", "ip", "timeofban"}}});
   REQUIRE(sql_tables("INSERT OR IGNORE INTO tags (name) VALUES (?)").writes == V{"tags"});
 }
+
+TEST_CASE("sql: declared one-column keys") {
+  using Cols = std::vector<std::pair<std::string, std::vector<std::string>>>;
+  REQUIRE(sql_tables("CREATE TABLE customers (id INTEGER PRIMARY KEY, email TEXT UNIQUE NOT NULL, name TEXT)").keys ==
+          Cols{{"customers", {"id", "email"}}});
+  REQUIRE(sql_tables("CREATE TABLE t (a INT, b INT, sku TEXT, PRIMARY KEY (a, b), UNIQUE (sku))").keys ==
+          Cols{{"t", {"sku"}}});  // the two-column key identifies neither column alone
+  REQUIRE(sql_tables("CREATE TABLE t (a INT, CONSTRAINT pk PRIMARY KEY (a))").keys == Cols{{"t", {"a"}}});
+}
