@@ -8,6 +8,7 @@ is a failure.
 Usage: fuzz_elf.py --optum OPTUM --seed-binary FILE [--seed-binary FILE ...] [--cases N] [--seed S]
 """
 import argparse
+import concurrent.futures
 import os
 import random
 import struct
@@ -68,13 +69,24 @@ def main():
     seeds = [open(p, "rb").read() for p in args.seed_binary]
     bad = 0
     with tempfile.TemporaryDirectory() as d:
-        path = os.path.join(d, "mutant")
+        # The mutants come from one random sequence, so make them all first (same cases as ever),
+        # then run them side by side: each `optum graph` run is independent.
+        paths = []
         for case in range(args.cases):
-            with open(path, "wb") as f:
+            paths.append(os.path.join(d, f"mutant{case}"))
+            with open(paths[-1], "wb") as f:
                 f.write(mutate(rng.choice(seeds), rng))
+
+        def run(path):
             try:
-                r = subprocess.run([args.optum, "graph", path, "-o", os.devnull], capture_output=True, text=True, timeout=30)
+                return subprocess.run([args.optum, "graph", path, "-o", os.devnull], capture_output=True, text=True, timeout=30)
             except subprocess.TimeoutExpired:
+                return None
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as pool:
+            results = list(pool.map(run, paths))
+        for case, (path, r) in enumerate(zip(paths, results)):
+            if r is None:
                 print(f"case {case}: timeout")
                 bad += 1
                 continue

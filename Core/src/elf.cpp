@@ -179,7 +179,16 @@ File read(const std::filesystem::path& p) {
   {
     std::ifstream in(p, std::ios::binary);
     if (!in) throw IrError(p.string() + ": cannot open");
-    f.data.assign(std::istreambuf_iterator<char>(in), {});
+    // One sized read: copying through an istreambuf_iterator is a byte-at-a-time loop, which took
+    // about a minute on a 150 MB sanitizer-built binary.
+    in.seekg(0, std::ios::end);
+    const auto size = in.tellg();
+    in.seekg(0);
+    if (size > 0) {
+      f.data.resize(static_cast<std::size_t>(size));
+      in.read(reinterpret_cast<char*>(f.data.data()), size);
+      f.data.resize(static_cast<std::size_t>(in.gcount()));
+    }
   }
   const Reader r(f.data, p);
   if (f.data.size() < 64 || r.get<std::uint32_t>(0) != 0x464c457f) r.fail("not an ELF file");
@@ -297,6 +306,14 @@ File read(const std::filesystem::path& p) {
       }
     }
     if (s.type == 4) {  // SHT_RELA
+      // PIE binaries carry a RELATIVE entry per stored pointer (1.6 million in a sanitizer build):
+      // size the containers once instead of rehashing as they grow.
+      std::size_t relatives = 0;
+      for (std::uint64_t off = s.offset; off + 24 <= s.offset + s.size; off += 24) {
+        if (static_cast<std::uint32_t>(r.get<std::uint64_t>(off + 8) & 0xffffffff) == 8) ++relatives;
+      }
+      f.relative_targets.reserve(f.relative_targets.size() + relatives);
+      f.relative_at.reserve(f.relative_at.size() + relatives);
       for (std::uint64_t off = s.offset; off + 24 <= s.offset + s.size; off += 24) {
         const auto where = r.get<std::uint64_t>(off);
         const auto info = r.get<std::uint64_t>(off + 8);
