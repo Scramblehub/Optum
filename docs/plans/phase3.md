@@ -48,6 +48,95 @@ scripts, tax invoices that must never be merged. A data generator (about 500 cus
 orders, tickets, form answers, bookings) writes a **ground truth**: which records are the same
 person or order.
 
+## Learning a tool we can't read
+
+Most of these tools are proprietary: their code can't be read, only their behaviour seen. So
+Optum learns each tool from outside, the way [REA](https://github.com/morluto/rea) works from an
+app's behaviour down to its binaries: every conclusion with its evidence. What can be seen, most
+reliable first:
+
+1. **Its published contract:** API docs, OpenAPI specs, webhook payloads, schema endpoints
+   (Odoo's `fields_get`), data exports.
+2. **Its observed input and output:** a recording proxy between the company and each tool, from
+   the shadow step on, captures every request, response and webhook (the company's own glue and
+   staff browsers make that traffic), plus browser recordings (HAR files). From recorded pairs:
+   the data model (fields, types, allowed values, what's required), the operations (what each
+   call changes: data before and after), state machines (a ticket's open → pending → solved), and
+   derived values (`total = subtotal × (1 + rate)`, checked on every example).
+3. **Its client code:** the web app's JavaScript bundle, a desktop or mobile app, read with
+   Optum's JS and binary frontends: endpoints, fields, client-side validation.
+
+From these, Optum writes a **behaviour spec** per tool (entities, operations, states, rules), each
+part with its confidence and evidence, as the graph has. The owned replacement is built from the
+spec, and the parallel step becomes **differential testing**: recorded inputs replayed against
+both, outputs compared, every mismatch fed back. A stage switches only when the replay agrees.
+
+**What can't be learned says what to keep.** A hidden algorithm (a fraud score, a spam filter)
+or value that is a network rather than software (card rails, an email sender's reputation, a tax
+authority) can't be reproduced from examples. So "keep or replace" is measured: how much of the
+tool's used behaviour the spec explains, judged by the replay.
+
+**The test company plays fair:** our stand-ins are open source, but Optum may not use their
+source. Only their APIs, exports, recorded traffic and client bundles count, as with a real
+SaaS.
+
+**Within the rules:** the company's own traffic, its data, published APIs and exports are its to
+use. Decompiling a vendor's client or getting around a protection can break its terms, or
+anti-circumvention law in some countries; client analysis is opted into per tool, never assumed.
+
+## What we can't see: filled by standards
+
+A spec covers what can be observed. How a tool stores data, backs it up or undoes a mistake can't
+be seen, and those are what matter when something goes wrong. The owned system doesn't guess at
+them: it fills them with explicit standards, the same for every replaced tool, each proved by a
+drill in the test company.
+
+| Can't see | The standard | Proved by |
+|---|---|---|
+| How data is stored | one transactional database (Postgres); every write a transaction | kill the process mid-write: no partial record, nothing lost |
+| Backups | nightly backups and point-in-time recovery | restore to a minute ago and reconcile with the ground truth |
+| Undoing a mistake | an append-only audit log of every change (who, what, when, before and after); any change revertible | revert one bad bulk edit: only it changes |
+| Rolling back a stage | migrations that run both ways; the old tool kept in sync in the fallback window | the switch-back rehearsed in every stage |
+| Retried or repeated calls | idempotency keys on writes; retries with backoff towards the kept services | the same webhook twice: one charge, one invoice |
+| Who may do what | roles from those observed in the old tool, confirmed by the company | the access matrix, tested per role |
+| How long data is kept | retention per record type; tax documents kept the legal period (6 years in the UK) and never altered | a retention check; regulated records byte for byte unchanged |
+| Personal data | export and erase per person (GDPR), except records the law says to keep | export and erase a test person; their invoices kept, anonymised where allowed |
+| Security | encryption at rest and in transit, secrets out of code, least privilege | a configuration check and a secrets scan |
+| Knowing it works | health checks, structured logs, alerts on a failed sync or on drift | break a sync: an alert within minutes |
+| Changes over time | versioned schemas and migrations; an old record always readable | upgrade and downgrade on a copy of the data |
+
+**A hidden behaviour that matters to people is observed or asked, never guessed.** An "undo send"
+window or a 30-day trash shows in the traffic; the spec picks it up. What only the company knows
+("we never delete tickets") comes from a short questionnaire per stage, recorded in the spec with
+the company as its evidence.
+
+## What it costs
+
+Replacing a tool is only worth it if owning it costs less, everything counted, and owning is easy
+to undercount: hosting, backups, security and, above all, the people who keep it running. So
+cost is measured in every stage, and it can make a tool a **keep** just as a hidden algorithm can.
+
+Counted per stage, over several years:
+
+| Side | Costs | How the number is got |
+|---|---|---|
+| The SaaS today | subscription (seats, tier), usage overages, add-ons, integration tools (Zapier tasks), staff time its quirks cost | the company's bills; the observed usage (seats, calls, records) |
+| Owning: running | compute, database, storage and its growth, backups (copies kept for the retention period), data transfer, monitoring and logs | **measured in the test company**: each replacement's CPU, memory, storage per 1,000 records, backup size; priced at a real host's rates |
+| Owning: securing | encryption, secrets, patching, vulnerability scans, access reviews, audits (GDPR records; SOC 2 if the company needs it) | tooling costs, and hours per month |
+| Owning: people | maintenance, upgrades, on-call, staff support | hours per month per service: an assumption the company sets |
+| One-time | building or generating it, migrating, the parallel period, training | the stage's actual effort |
+| Risk | an outage or data loss, times its likelihood | the drills' results; the company's cost of an hour of downtime |
+
+Each stage has a **business case before it starts and a measured one after**: the yearly cost of
+each side, break-even, and what would flip the decision (staff hours doubling, data growing ten
+times). A tool whose owned cost doesn't beat the SaaS by a margin is kept, and the report says why.
+
+Shared costs are counted as shared: eight tools on one platform means one database, one backup
+system, one monitoring setup, so each stage costs less than the last; the model shows that
+instead of pricing each tool as if it stood alone. And people are the largest risk: for a small
+company, a few hours a month of upkeep can outweigh a $50 subscription, an honest reason to keep
+a cheap tool or group it into another stage.
+
 ## Each stage, in five steps
 
 Every replaced service goes through the same steps, and moves on only when the step's checks
@@ -55,8 +144,8 @@ are green:
 
 | Step | What happens | The company's experience |
 |---|---|---|
-| 1. Shadow | The owned system receives copies of the data and computes the same results; nothing uses them | no change |
-| 2. Parallel | Both run; results are reconciled record by record; the old tool still counts | no change; a daily "do they agree?" report |
+| 1. Shadow | Traffic to the tool is recorded and its behaviour spec learned; the owned system receives copies of the data and computes the same results; nothing uses them | no change |
+| 2. Parallel | Both run; recorded inputs replayed against both, results reconciled record by record; the old tool still counts | no change; a daily "do they agree?" report |
 | 3. Switch | The owned system counts; the old tool is kept in sync as a fallback | staff move over, for this one service |
 | 4. Fallback window | The old tool is read-only, still synced; switching back is one step | a safety net while people adjust |
 | 5. Retire | Data exported and archived, the subscription cancelled | one bill less |
@@ -92,14 +181,20 @@ retired**.
 | # | Branch | Job | Size |
 |---|---|---|---|
 | 1 | `feat/testco` | `testco/`: Compose file for the ten stand-ins, the company's glue and scripts, the data generator and its ground truth | 1–2 weeks |
-| 2 | `feat/frontend-saas` | Adapters reading each tool's schema and API into the graph (the [protocol](../protocol.md) exists): fields, endpoints in use, flows. `optum diagnose testco/` finds every planted waste and no unplanted ones | 2 weeks |
-| 3 | `feat/unified-model` | One company graph: shared entities across tools; what each tool is actually used for; which to keep and why; the stage order | 1 week |
-| 4 | `feat/coexist-sync` | Two-way sync between the owned system and the remaining tools, by identity; the record-matching measurement against the ground truth | 1–2 weeks |
-| 5 | `feat/stage-runner` | The five steps as a harness: shadow, parallel with daily reconciliation, switch, fallback, retire; contract tests for the kept services; rollback | 1–2 weeks |
-| 6 | `feat/stage-1-glue`, `feat/stage-2-...` | The owned replacements, one stage at a time | 1 week each |
+| 2 | `feat/observe` | A recording proxy in front of each stand-in (requests, responses, webhooks) and HAR import; recordings stored as fixtures | 1 week |
+| 3 | `feat/infer-spec` | The behaviour spec per tool from published contracts, recordings and exports (and client bundles where opted in): entities, operations, states, rules, with evidence; checked against what each stand-in really does, **without reading its source** | 2 weeks |
+| 4 | `feat/frontend-saas` | Adapters reading each tool's schema and API into the graph (the [protocol](../protocol.md) exists): fields, endpoints in use, flows. `optum diagnose testco/` finds every planted waste and no unplanted ones | 2 weeks |
+| 5 | `feat/unified-model` | One company graph: shared entities across tools; what each tool is actually used for; which to keep and why; the stage order | 1 week |
+| 6 | `feat/coexist-sync` | Two-way sync between the owned system and the remaining tools, by identity; the record-matching measurement against the ground truth | 1–2 weeks |
+| 7 | `feat/platform` | The standards filled in for what can't be seen (storage, backups, audit log and revert, idempotency, roles, retention, GDPR, security, monitoring, migrations) and their drills | 2 weeks |
+| 7b | `feat/cost-model` | Resource measurement per replacement in the test company (CPU, memory, storage per 1,000 records, backups); the cost model (both sides, shared costs, one-time, risk) and each stage's business case, before and after | 1 week |
+| 8 | `feat/stage-runner` | The five steps as a harness: shadow, parallel with replay comparison and daily reconciliation, switch, fallback, retire; contract tests for the kept services; rollback | 1–2 weeks |
+| 9 | `feat/stage-1-glue`, `feat/stage-2-...` | The owned replacements, built from each spec on the platform, one stage at a time | 1 week each |
 
 **Gate v0.3:** stages 1 and 2 go through all five steps in the test company with every check
-green, including one rehearsed rollback; the later stages are planned with their order and
+green, including one rehearsed rollback; their specs learned without reading the stand-ins'
+source, and the replay agreeing; the platform drills passing; the measured cost of each stage set
+against the SaaS it replaces, with the decision it supports; the later stages are planned with their order and
 checks; before/after numbers reported (services paid for, places a customer is kept, lines of
 glue). Stages 3 to 7 continue after v0.3.
 
@@ -109,6 +204,9 @@ glue). Stages 3 to 7 continue after v0.3.
   ten containers (roughly 8–12 GB of memory; this machine has 62 GB). Either you install Docker
   locally, or it runs in CI only; local is far better for building it.
 - **The two kept services:** payments and accounting, or another pair.
+- **Cost assumptions:** staff hours per service and the company's cost of an hour of downtime are
+  assumptions in the model; the interviews should give real ones, and a hosting provider to price
+  against.
 - **The stand-ins:** the ones above unless the interviews point elsewhere; swapping one later
   costs only its adapter.
 
