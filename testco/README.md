@@ -1,0 +1,37 @@
+# The test company
+
+A small online retailer made of open-source stand-ins for the ten services a company like it pays
+for, its glue, and generated data with a known answer for everything
+([plan](../docs/plans/phase3.md)). Optum unifies it in stages; this is where that's tested.
+
+```sh
+docker compose -f testco/compose.yaml up -d --wait   # start (first start: ~2 min, Odoo sets up)
+python3 testco/smoke.py                              # each service answers as the glue will use it
+python3 testco/generate.py                           # data for every tool, and its ground truth
+docker compose -f testco/compose.yaml down           # stop (add -v to delete the data too)
+```
+
+Everything listens on `127.0.0.1` only.
+
+## Services so far
+
+| Service | Stand-in | Port | Fate |
+|---|---|---|---|
+| Payments | stripe-mock 0.197 (Stripe's mock of its API; keeps no data, answers in Stripe's shape) | 12111 | kept |
+| Accounting and tax filing | Odoo 18 with Invoicing (database `testco`, login `admin` / `admin`) | 8069 | kept |
+| Automation glue | n8n 1.80 | 5678 | replaced in stage 1 |
+
+The other seven (spreadsheets, forms, email marketing, scheduling, help desk, CRM, shop) come next.
+
+## The data
+
+`generate.py` writes `data/<tool>.json` for every tool (each with its own record ids and its own
+spelling of people) and `data/ground_truth.json`: which records are the same person, which are the
+same order. Deterministic for a seed. The traps for record matching:
+
+- **two different people named John Smith**, spelled exactly alike everywhere: never one person;
+- **one person with two emails** (Catherine Novak: the shop and the help desk know the second);
+- nicknames and dropped letters in some tools; missing phones where a tool doesn't ask.
+
+Every order is a shop order, a payment, and an invoice in accounting. Invoices are tax documents:
+`"regulated": "tax"`, never merged or rewritten.

@@ -1,0 +1,61 @@
+# The test company (docs/plans/phase3.md): stand-ins for a small retailer's ten services.
+# Slice 1: the two kept services (payments, accounting) and the automation glue (n8n).
+# Every port is bound to 127.0.0.1: nothing here is reachable from outside this machine.
+name: testco
+
+services:
+  # Kept service 1: payments. Stripe's own mock of its API (no real money, no account needed).
+  payments:
+    image: stripe/stripe-mock:v0.197.0
+    ports: ["127.0.0.1:12111:12111"]
+
+  # Kept service 2: accounting and tax filing. Odoo with the Invoicing/Accounting app.
+  accounting-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: odoo
+      POSTGRES_PASSWORD: odoo
+      POSTGRES_DB: postgres
+    volumes: [accounting-db:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U odoo"]
+      interval: 3s
+      retries: 30
+
+  accounting:
+    image: odoo:18.0
+    depends_on:
+      accounting-db: {condition: service_healthy}
+    environment:
+      HOST: accounting-db
+      USER: odoo
+      PASSWORD: odoo
+    # A database named testco with the accounting app, created on first start; no demo data.
+    command: ["odoo", "-d", "testco", "-i", "account", "--without-demo=all", "--db-filter=^testco$"]
+    ports: ["127.0.0.1:8069:8069"]
+    volumes: [accounting-data:/var/lib/odoo]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8069/web/health || exit 1"]
+      interval: 5s
+      retries: 60
+      start_period: 30s
+
+  # Replaced in stage 1: the automation glue (Zapier's role).
+  automation:
+    image: n8nio/n8n:1.80.0
+    environment:
+      N8N_SECURE_COOKIE: "false"
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      N8N_RUNNERS_ENABLED: "true"
+    ports: ["127.0.0.1:5678:5678"]
+    volumes: [automation-data:/home/node/.n8n]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5678/healthz || exit 1"]  # localhost is ::1 here; n8n listens on IPv4
+      interval: 5s
+      retries: 30
+
+volumes:
+  accounting-db:
+  accounting-data:
+  automation-data:
