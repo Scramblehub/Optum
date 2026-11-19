@@ -35,6 +35,55 @@ std::string entity_name(const std::string& raw) {
   return singular(n);
 }
 
+// Natural keys: fields that identify a record by themselves.
+bool natural_key(const std::string& f) {
+  static const std::unordered_set<std::string> k = {"email", "email_address", "sku", "username", "user_name", "login",
+                                                    "slug", "ean", "upc", "gtin", "isbn", "iban", "external_id",
+                                                    "account_number", "customer_number", "order_number", "handle"};
+  return k.count(f) > 0;
+}
+
+// Words of an id, a path or a name: camelCase and separators split, lower case.
+std::vector<std::string> words(const std::string& s) {
+  std::vector<std::string> out;
+  std::string w = normalize_field(s);
+  std::string cur;
+  for (char c : w + "_") {
+    if (std::isalnum(static_cast<unsigned char>(c))) cur += c;
+    else if (!cur.empty()) {
+      out.push_back(cur);
+      cur.clear();
+    }
+  }
+  return out;
+}
+
+// Regulated forms: tax, legal and medical records are kept as they are, separately (they're
+// required in their own form, often immutable once issued), so they're never proposed for merging.
+std::string regulated_kind(const EntityShape& s) {
+  static const std::unordered_map<std::string, std::string> by_word = {
+      {"tax", "tax"}, {"taxes", "tax"}, {"vat", "tax"}, {"gst", "tax"}, {"hst", "tax"}, {"w2", "tax"}, {"w4", "tax"},
+      {"w8", "tax"}, {"w9", "tax"}, {"1099", "tax"}, {"1040", "tax"}, {"irs", "tax"}, {"hmrc", "tax"},
+      {"legal", "legal"}, {"contract", "legal"}, {"contracts", "legal"}, {"agreement", "legal"}, {"consent", "legal"},
+      {"waiver", "legal"}, {"nda", "legal"}, {"affidavit", "legal"}, {"litigation", "legal"}, {"gdpr", "legal"},
+      {"kyc", "legal"}, {"aml", "legal"},
+      {"medical", "medical"}, {"patient", "medical"}, {"patients", "medical"}, {"diagnosis", "medical"},
+      {"prescription", "medical"}, {"clinical", "medical"}, {"hipaa", "medical"}, {"phi", "medical"},
+      {"ehr", "medical"}, {"emr", "medical"}, {"healthcare", "medical"}, {"icd10", "medical"}};
+  static const std::unordered_map<std::string, std::string> by_field = {
+      {"ssn", "tax"}, {"tin", "tax"}, {"itin", "tax"}, {"ein", "tax"}, {"tax_id", "tax"}, {"vat_number", "tax"},
+      {"vat_id", "tax"}, {"mrn", "medical"}, {"npi", "medical"}, {"icd10", "medical"}, {"icd_code", "medical"},
+      {"diagnosis_code", "medical"}, {"nhs_number", "medical"}};
+  // The shape's own name and where it lives (module path, table name, API path).
+  for (const auto& w : words(s.id.substr(s.id.find(':') + 1))) {
+    if (auto it = by_word.find(w); it != by_word.end()) return it->second;
+  }
+  for (const auto& f : s.normalized) {
+    if (auto it = by_field.find(f); it != by_field.end()) return it->second;
+  }
+  return "";
+}
+
 struct Similarity {
   double containment = 0;
   int shared_specific = 0;  // shared fields that aren't generic
@@ -62,7 +111,7 @@ std::string normalize_field(const std::string& field) {
   return out;
 }
 
-std::vector<EntityGroup> find_entities(const Graph& g) {
+EntityResult find_entities(const Graph& g) {
   // Shapes: classes with fields; tables with the columns code names; APIs with the fields code sends.
   std::map<std::string, EntityShape> shapes;
   auto add_fields = [](EntityShape& s, const nlohmann::json& list) {
@@ -114,12 +163,37 @@ std::vector<EntityGroup> find_entities(const Graph& g) {
     }
     if (std::find(s.users.begin(), s.users.end(), from.id) == s.users.end()) s.users.push_back(from.id);
     add_fields(s, table ? e.attrs["columns"] : e.attrs["fields"]);
+    if (table && e.attrs.contains("keys")) {
+      for (const auto& k : e.attrs["keys"]) {
+        const std::string nk = normalize_field(k.get<std::string>());
+        if (std::find(s.declared_keys.begin(), s.declared_keys.end(), nk) == s.declared_keys.end()) s.declared_keys.push_back(nk);
+      }
+    }
   }
+  // Identity keys, then regulated forms out.
+  EntityResult result;
   std::vector<EntityShape> list;
   for (auto& [_, s] : shapes) {
-    if (s.normalized.size() >= 3) list.push_back(std::move(s));
+    if (s.normalized.size() < 3) continue;
+    for (const auto& f : s.normalized) {
+      std::string key;
+      if ((f == "id" || f == "uuid" || f == "guid" || f == "pk") && !s.name.empty()) key = s.name + "_" + (f == "pk" ? "id" : f);
+      else if (!s.name.empty() && (f == s.name + "_id" || f == s.name + "_uuid" || f == s.name + "_key")) key = f;
+      else if (natural_key(f)) key = f;
+      if (!key.empty() && std::find(s.keys.begin(), s.keys.end(), key) == s.keys.end()) s.keys.push_back(key);
+    }
+    for (const auto& k : s.declared_keys) {
+      const std::string key = (k == "id" && !s.name.empty()) ? s.name + "_id" : k;
+      if (std::find(s.keys.begin(), s.keys.end(), key) == s.keys.end()) s.keys.push_back(key);
+    }
+    s.regulated = regulated_kind(s);
+    if (!s.regulated.empty()) {
+      result.regulated.push_back(std::move(s));
+      continue;
+    }
+    list.push_back(std::move(s));
   }
-  if (list.size() < 2) return {};
+  if (list.size() < 2) return result;
 
   // Field weights: rare fields say more; generic ones (id, name, created_at) little.
   std::unordered_map<std::string, int> df;
@@ -143,12 +217,19 @@ std::vector<EntityGroup> find_entities(const Graph& g) {
     s.containment = std::min(wa, wb) > 0 ? shared / std::min(wa, wb) : 0;
     return s;
   };
-  // Same entity: most of the smaller one's (weighted) fields are shared, two of them specific;
-  // with the same name (Customer, customers, /customers), less is enough.
+  // Same entity only when something identifies it, never by coincidence of names or a few
+  // fields: a shared identity key (an id, a natural or declared-unique key), or else a temporary
+  // composite key: 3+ specific fields in common, covering most of the smaller shape.
+  auto shared_key = [&](std::size_t a, std::size_t b) {
+    for (const auto& k : list[a].keys) {
+      if (std::find(list[b].keys.begin(), list[b].keys.end(), k) != list[b].keys.end()) return true;
+    }
+    return false;
+  };
   auto same = [&](std::size_t a, std::size_t b) {
     const Similarity s = similarity(list[a], list[b]);
-    if (list[a].name == list[b].name && !list[a].name.empty()) return s.shared_specific >= 1 && s.containment >= 0.4;
-    return s.shared_specific >= 2 && s.containment >= 0.6;
+    if (shared_key(a, b)) return s.shared_specific >= 2 && s.containment >= 0.4;
+    return s.shared_specific >= 3 && s.containment >= 0.75;
   };
 
   std::vector<std::tuple<double, std::size_t, std::size_t>> pairs;
@@ -179,7 +260,6 @@ std::vector<EntityGroup> find_entities(const Graph& g) {
     for (std::size_t k : merged) group_of[k] = gi;
   }
 
-  std::vector<EntityGroup> out;
   for (const auto& ks : groups) {
     if (ks.size() < 2) continue;
     // Data in several forms (a table, a payload, classes in different languages): classes of one
@@ -206,11 +286,28 @@ std::vector<EntityGroup> find_entities(const Graph& g) {
     for (const auto& f : order) {
       if (counts[f] >= half) eg.proposed.push_back(f);
     }
+    // The basis: identity keys every member has, else the specific fields they all share.
+    std::map<std::string, std::size_t> key_count, field_count;
+    for (const auto& m : eg.members) {
+      for (const auto& k : m.keys) ++key_count[k];
+      for (const auto& f : m.normalized) {
+        if (!generic_field(f)) ++field_count[f];
+      }
+    }
+    for (const auto& [k, n] : key_count) {
+      if (n == eg.members.size()) eg.basis_fields.push_back(k);
+    }
+    eg.basis = eg.basis_fields.empty() ? "composite" : "identity";
+    if (eg.basis_fields.empty()) {
+      for (const auto& [f, n] : field_count) {
+        if (n == eg.members.size()) eg.basis_fields.push_back(f);
+      }
+    }
     std::sort(eg.members.begin(), eg.members.end(), [](const auto& x, const auto& y) { return x.id < y.id; });
-    out.push_back(std::move(eg));
+    result.groups.push_back(std::move(eg));
   }
-  std::sort(out.begin(), out.end(), [](const auto& a, const auto& b) { return a.members.size() > b.members.size(); });
-  return out;
+  std::sort(result.groups.begin(), result.groups.end(), [](const auto& a, const auto& b) { return a.members.size() > b.members.size(); });
+  return result;
 }
 
 }  // namespace optum

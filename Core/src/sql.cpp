@@ -85,8 +85,9 @@ std::string column_name(std::string t) {  // drop quotes and a table prefix (o.t
 }
 
 // The columns each statement names for its table (see SqlTables::columns).
-std::vector<std::pair<std::string, std::vector<std::string>>> sql_columns(const std::vector<std::string>& toks,
-                                                                           const SqlTables& t) {
+std::vector<std::pair<std::string, std::vector<std::string>>> sql_columns(
+    const std::vector<std::string>& toks, const SqlTables& t,
+    std::vector<std::pair<std::string, std::vector<std::string>>>& out_keys) {
   std::vector<std::pair<std::string, std::vector<std::string>>> out;
   auto add_cols = [&](const std::string& table, std::vector<std::string> cols) {
     std::vector<std::string> uniq;
@@ -130,22 +131,43 @@ std::vector<std::pair<std::string, std::vector<std::string>>> sql_columns(const 
       while (j < toks.size() && toks[j] != "(") ++j;
       if (j >= toks.size()) continue;
       const std::size_t end = paren_end(j);
-      std::vector<std::string> cols;
+      std::vector<std::string> cols, keys;
       bool start = true;  // a column name starts each comma-separated definition
       int depth = 0;
+      std::string current;     // the column being defined
+      std::string constraint;  // a table-level PRIMARY KEY (...) / UNIQUE (...) being read
+      std::vector<std::string> constraint_cols;
+      auto end_definition = [&] {
+        if (!constraint.empty() && constraint_cols.size() == 1) keys.push_back(constraint_cols[0]);  // one-column keys only
+        constraint.clear();
+        constraint_cols.clear();
+        current.clear();
+      };
       for (std::size_t k = j + 1; k < end; ++k) {
+        const std::string uk = upper(toks[k]);
         if (toks[k] == "(") ++depth;
         else if (toks[k] == ")") --depth;
         else if (toks[k] == "," && depth == 0) {
+          end_definition();
           start = true;
           continue;
         }
         if (start && depth == 0) {
-          if (is_column(toks[k])) cols.push_back(column_name(toks[k]));
+          if (uk == "PRIMARY" || uk == "UNIQUE" || uk == "CONSTRAINT") constraint = uk;
+          else if (is_column(toks[k])) cols.push_back(current = column_name(toks[k]));
           start = false;
+          continue;
+        }
+        if (!constraint.empty() && depth == 1 && toks[k] != "(" && toks[k] != "," && is_column(toks[k])) {
+          constraint_cols.push_back(column_name(toks[k]));
+        } else if (!current.empty() && depth == 0 && (uk == "PRIMARY" || uk == "UNIQUE")) {
+          keys.push_back(current);  // email TEXT UNIQUE, id INTEGER PRIMARY KEY
+          current.clear();
         }
       }
+      end_definition();
       add_cols(t.writes.front(), std::move(cols));
+      if (!keys.empty()) out_keys.emplace_back(t.writes.front(), std::move(keys));
       i = end;
     } else if (u == "UPDATE" && !t.writes.empty()) {
       std::vector<std::string> cols;
@@ -250,7 +272,7 @@ SqlTables sql_tables(std::string_view sql) {
     }
     if (list && at < toks.size() && is_table(toks[at])) add(*list, clean(toks[at]));
   }
-  out.columns = sql_columns(toks, out);
+  out.columns = sql_columns(toks, out, out.keys);
   return out;
 }
 

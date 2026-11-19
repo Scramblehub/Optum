@@ -267,7 +267,20 @@ Diagnosis diagnose(const Graph& g, const std::filesystem::path& source_root) {
   unused_code(g, unit, d.findings);
 
   // The same data in several places: classes, tables and API payloads with matching fields.
-  for (const EntityGroup& eg : find_entities(g)) {
+  const EntityResult entities = find_entities(g);
+  if (!entities.regulated.empty()) {
+    std::map<std::string, std::vector<std::string>> by_kind;
+    for (const auto& r : entities.regulated) by_kind[r.regulated].push_back(r.id);
+    for (const auto& [kind, ids] : by_kind) {
+      std::string list;
+      for (std::size_t i = 0; i < ids.size() && i < 8; ++i) list += (i ? ", " : "") + std::string("`") + ids[i] + "`";
+      if (ids.size() > 8) list += ", ...";
+      d.notes.push_back(std::to_string(ids.size()) + " " + kind +
+                        " record shape(s) left out of \"the same data in several places\": regulated forms stay as "
+                        "they are, separately (" + list + ")");
+    }
+  }
+  for (const EntityGroup& eg : entities.groups) {
     Finding f;
     f.kind = "same_entity";
     std::set<std::string> comps;
@@ -280,7 +293,7 @@ Diagnosis diagnose(const Graph& g, const std::filesystem::path& source_root) {
         if (auto i = g.find(u)) comps.insert(component_of(g.node(unit[*i])));
       }
       members.push_back({{"id", m.id}, {"kind", m.kind}, {"name", m.name}, {"fields", m.fields},
-                         {"normalized", m.normalized}, {"used_by", m.users}});
+                         {"normalized", m.normalized}, {"keys", m.keys}, {"used_by", m.users}});
     }
     f.units.assign(comps.begin(), comps.end());
     f.confidence = "likely";
@@ -291,7 +304,7 @@ Diagnosis diagnose(const Graph& g, const std::filesystem::path& source_root) {
     }
     f.title = "`" + eg.name + "` is defined in " + std::to_string(eg.members.size()) + " places (" + where + ")";
     f.evidence = {{"entity", eg.name}, {"similarity", std::round(eg.score * 100) / 100}, {"members", members},
-                  {"proposed_fields", eg.proposed}};
+                  {"proposed_fields", eg.proposed}, {"basis", eg.basis}, {"basis_fields", eg.basis_fields}};
     d.findings.push_back(std::move(f));
   }
 
@@ -356,7 +369,7 @@ nlohmann::json to_json(const Diagnosis& d) {
                         {"targets", f.targets}, {"evidence", f.evidence}});
   }
   return {{"report_version", "0.1"}, {"source", d.source}, {"units", units},
-          {"reached", reached}, {"packages", d.packages}, {"findings", findings}};
+          {"reached", reached}, {"packages", d.packages}, {"findings", findings}, {"notes", d.notes}};
 }
 
 std::string to_markdown(const Diagnosis& d) {
@@ -401,7 +414,12 @@ std::string to_markdown(const Diagnosis& d) {
            "**. One definition could replace them: `" + f.evidence["entity"].get<std::string>() + "` with ";
       std::string proposed;
       for (const auto& p : f.evidence["proposed_fields"]) proposed += (proposed.empty() ? "" : ", ") + p.get<std::string>();
-      o += proposed + ".\n\n| Field |";
+      std::string basis;
+      for (const auto& b : f.evidence["basis_fields"]) basis += (basis.empty() ? "" : ", ") + b.get<std::string>();
+      o += proposed + ". Matched by " +
+           (f.evidence["basis"] == "identity" ? "a shared identity key: " + basis
+                                              : "a temporary composite key (no shared id): " + basis) +
+           ".\n\n| Field |";
       for (const auto& mj : f.evidence["members"]) o += " `" + mj["id"].get<std::string>() + "` (" + mj["kind"].get<std::string>() + ") |";
       o += "\n|---|";
       for (std::size_t i = 0; i < f.evidence["members"].size(); ++i) o += "---|";
@@ -457,6 +475,12 @@ std::string to_markdown(const Diagnosis& d) {
       }
       o += "\n";
     }
+    o += "\n";
+  }
+
+  if (!d.notes.empty()) {
+    o += "## Notes\n\n";
+    for (const auto& n : d.notes) o += "- " + n + "\n";
     o += "\n";
   }
 

@@ -49,6 +49,7 @@ struct Diagnosis {
   std::vector<Target> reached;              // APIs, services and tables, with who uses them
   std::vector<std::string> packages;        // third-party packages and libraries imported
   std::vector<Finding> findings;
+  std::vector<std::string> notes;  // what analyses left out on purpose, and why
 };
 
 // `source_root`: the analysed directory, for analyses that read source (duplicated logic). Empty

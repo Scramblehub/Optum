@@ -139,12 +139,32 @@ Fields are compared by meaning, not spelling: `firstName`, `first_name` and `Fir
 field. Each field weighs by how rare it is across all shapes, and generic fields (`id`, `name`,
 `status`, `created_at`...) weigh little, so they can't make two shapes look alike.
 
-Two shapes are the same entity when 60% or more of the smaller one's (weighted) fields are shared,
-2 of them specific. With the same name (`Customer`, `customers`, `/contacts` → contact: names are
-singular, lower case) 40% and 1 specific field are enough. Groups are complete-link, as for clones.
-A group must span **2 or more forms**: a table, a payload, or classes in different languages.
-Classes of one language alone are code structure (subclasses, vendored copies; duplicated logic
-covers those). Shapes need 3+ fields; test code is left out.
+**Identity, never coincidence.** A shared name (`Customer` here, `customers` there) or a few
+fields in common can be coincidence: a marketing `Customer` segment isn't the CRM's customer, and a
+hotel and a restaurant both have a city and a phone. So shapes match only when something
+identifies the entity:
+
+1. **A shared identity key**: the entity's own id, canonical across forms (`id` in the
+   `customers` table is `customer_id`), a `<name>_id` / `_uuid` / `_key` field, a natural key
+   (`email`, `sku`, `username`, `iban`, `external_id`...), or a column declared `PRIMARY KEY` or
+   `UNIQUE`. Then 40%+ of the smaller shape's (weighted) fields shared, 2 of them specific.
+2. **Else a temporary composite key**: no id in common, but 3+ specific fields every member has,
+   covering 75%+ of the smaller shape: together they stand in for an id.
+
+A field like `customer_email` on an order refers to a customer; it isn't the order's identity.
+The finding says which basis matched (the shared key, or the fields of the composite).
+
+**Regulated forms stay apart.** Tax, legal and medical records (a W-9, a contract, a consent, a
+patient record) are required in their own form and often can't change once issued, so they are
+never proposed for merging, however many fields they share. A shape is regulated when its name or
+where it lives (module path, table, API path) has a word like `tax`, `vat`, `w9`, `1099`, `irs`,
+`legal`, `contract`, `agreement`, `consent`, `gdpr`, `kyc`, `medical`, `patient`, `diagnosis`,
+`prescription`, `clinical`, `hipaa`, or when it has a regulated identifier (`ssn`, `tin`, `ein`,
+`tax_id`, `vat_number`, `mrn`, `npi`, `icd10`). The report's notes list what was left out.
+
+Groups are complete-link, as for clones, and must span **2 or more forms**: a table, a payload,
+or classes in different languages (classes of one language alone are code structure: subclasses,
+vendored copies; duplicated logic covers those). Shapes need 3+ fields; test code is left out.
 
 The finding proposes one definition (the fields half the members or more have) and shows each
 field as each place spells it. Confidence: `likely`.
@@ -160,7 +180,7 @@ targets). Any missing or extra finding fails the test.
 | [mixed/crm_glue](../tests/fixtures/programs/mixed/crm_glue) | 1 finding: Python, JS, C and an n8n workflow syncing shop orders into a CRM |
 | [mixed/shared_table](../tests/fixtures/programs/mixed/shared_table) | 1 finding: a Python report and a JS signup both on `customers` |
 | [mixed/one_package](../tests/fixtures/programs/mixed/one_package) | no finding: one package's modules and its tests share a table |
-| [mixed/entities](../tests/fixtures/programs/mixed/entities) | a customer in 4 places (Python dataclass, SQL table, JS class, CRM payload in camelCase) and an order in 3; decoys with different data or only generic fields in common |
+| [mixed/entities](../tests/fixtures/programs/mixed/entities) | a customer in 4 places (Python dataclass, SQL table, JS class, CRM payload in camelCase; matched by `email`) and an order in 3 (matched by a composite key); decoys: different data, only generic fields in common, a same-named marketing `Customer`, a hotel and a restaurant with a city and a phone, and regulated forms (a W-9 and its table, a medical record with the customer's fields). The earlier rules merged the medical record into the customer and grouped the W-9 with its table |
 | [mixed/dupes](../tests/fixtures/programs/mixed/dupes) | 5 clone families: exact, renamed and edited copies in Python, a renamed copy in JS, near copies in C; decoys with the same idioms but other logic, tiny look-alike helpers, and a copy in test code |
 | [mixed/unused](../tests/fixtures/programs/mixed/unused) | 7 unused definitions in Python, JS and C, 1 used only by tests, and 20 decoys that must not be reported (dispatch table, decorator, `getattr`, `__all__`, prefix and suffix dispatch, generated code, outside base, callback, export, macro, `.inc` table, function-pointer table...) |
 
@@ -221,5 +241,6 @@ gives each one's `id`, `kind`, `file`, `line` and `lines`, with `evidence.lines`
 `duplicated_logic`, `targets` are the functions, and `evidence` has `clone_type` (exact, renamed,
 similar), `similarity`, `members[]` (`id`, `file`, `line`, `lines`, `tokens`) and `lines_saved`.
 For `same_entity`, `targets` are the class, table and API nodes, and `evidence` has `entity`,
-`similarity`, `members[]` (`id`, `kind`, `name`, `fields` as written, `normalized`, `used_by`) and
-`proposed_fields`.
+`similarity`, `members[]` (`id`, `kind`, `name`, `fields` as written, `normalized`, `keys`,
+`used_by`), `proposed_fields`, `basis` (`identity` or `composite`) and `basis_fields`. The report's
+top-level `notes` say what analyses left out on purpose (regulated forms).

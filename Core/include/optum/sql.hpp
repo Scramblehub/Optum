@@ -16,6 +16,8 @@ struct SqlTables {
   // list, UPDATE's SET, and SELECT's list when the statement reads one table. For finding the
   // same entity in several places (docs/diagnose.md).
   std::vector<std::pair<std::string, std::vector<std::string>>> columns;
+  // Columns CREATE TABLE declares as a one-column PRIMARY KEY or UNIQUE: identity keys.
+  std::vector<std::pair<std::string, std::vector<std::string>>> keys;
 };
 
 // Returns empty lists when the text doesn't look like SQL. Table names keep their schema prefix
