@@ -19,8 +19,8 @@ optum diagnose . -f json -o diagnosis.json                   # for an agent or a
   This is the inventory, even when there are no findings.
 - **Third-party packages and libraries** the code imports.
 
-Findings so far: **overlapping glue**, **unused code**, **code only tests use** and **duplicated
-logic**. The same data defined in several places comes next ([plan](plans/phase2.md)).
+Findings: **overlapping glue**, **unused code**, **code only tests use**, **duplicated logic**
+and **the same data in several places** ([plan](plans/phase2.md)).
 
 ## Overlapping glue
 
@@ -122,6 +122,33 @@ One finding per group. Confidence: `certain` for exact and renamed copies, `like
 copies. Evidence: the clone type, the lowest similarity between two members, each member's
 location and size, and `lines_saved`: the lines removed by keeping one.
 
+## The same data in several places
+
+One entity (a customer, an order) defined again in each place that holds it: a Python class, a
+SQL table, a JS class, the payload sent to an API. Each copy can drift from the others; one
+definition could replace them. Read from the fields the frontends record
+([frontends.md](frontends.md)):
+
+| Shape | Fields from |
+|---|---|
+| Class (Python, JS) | annotated class attributes (dataclasses), attributes set on `self` / `this`, JS class fields |
+| Table | the columns code names for it: `CREATE TABLE`, `INSERT (...)`, `UPDATE ... SET`, a one-table `SELECT` |
+| API payload | the body code sends: `requests.post(url, json={...})` (or a name bound to a dict), `axios.post(url, {...})`, `fetch(url, {body: JSON.stringify({...})})` |
+
+Fields are compared by meaning, not spelling: `firstName`, `first_name` and `FirstName` are one
+field. Each field weighs by how rare it is across all shapes, and generic fields (`id`, `name`,
+`status`, `created_at`...) weigh little, so they can't make two shapes look alike.
+
+Two shapes are the same entity when 60% or more of the smaller one's (weighted) fields are shared,
+2 of them specific. With the same name (`Customer`, `customers`, `/contacts` → contact: names are
+singular, lower case) 40% and 1 specific field are enough. Groups are complete-link, as for clones.
+A group must span **2 or more forms**: a table, a payload, or classes in different languages.
+Classes of one language alone are code structure (subclasses, vendored copies; duplicated logic
+covers those). Shapes need 3+ fields; test code is left out.
+
+The finding proposes one definition (the fields half the members or more have) and shows each
+field as each place spells it. Confidence: `likely`.
+
 ## How it's checked
 
 Each sample has an answer key with planted findings, `expected_diagnosis.json`, which
@@ -133,6 +160,7 @@ targets). Any missing or extra finding fails the test.
 | [mixed/crm_glue](../tests/fixtures/programs/mixed/crm_glue) | 1 finding: Python, JS, C and an n8n workflow syncing shop orders into a CRM |
 | [mixed/shared_table](../tests/fixtures/programs/mixed/shared_table) | 1 finding: a Python report and a JS signup both on `customers` |
 | [mixed/one_package](../tests/fixtures/programs/mixed/one_package) | no finding: one package's modules and its tests share a table |
+| [mixed/entities](../tests/fixtures/programs/mixed/entities) | a customer in 4 places (Python dataclass, SQL table, JS class, CRM payload in camelCase) and an order in 3; decoys with different data or only generic fields in common |
 | [mixed/dupes](../tests/fixtures/programs/mixed/dupes) | 5 clone families: exact, renamed and edited copies in Python, a renamed copy in JS, near copies in C; decoys with the same idioms but other logic, tiny look-alike helpers, and a copy in test code |
 | [mixed/unused](../tests/fixtures/programs/mixed/unused) | 7 unused definitions in Python, JS and C, 1 used only by tests, and 20 decoys that must not be reported (dispatch table, decorator, `getattr`, `__all__`, prefix and suffix dispatch, generated code, outside base, callback, export, macro, `.inc` table, function-pointer table...) |
 
@@ -174,6 +202,14 @@ one named from Cython without a plain string).
   nested in them were false findings; the distinct-pieces and nesting rules removed them.
 - **Speed:** 1.6 s for the standard library's saved graph (it re-reads the source).
 
+### The same data on real code
+
+Real code with classes, tables and API payloads side by side is what Phase 3's test company is
+for. dist-packages has 14 tables with columns and no payloads, and gives no group (a first version
+without the forms rule gave 577, nearly all classes against classes: vendored copies and
+subclasses). It also showed a table bug, now fixed: SQLite's `INSERT OR REPLACE INTO bans` read as
+a table named `OR`.
+
 ## JSON
 
 `report_version` is `"0.1"`. Top level: `source`, `units` (with frontend and lines), `findings`,
@@ -184,3 +220,6 @@ findings, `units` is the component, `targets` the definitions' ids, and `evidenc
 gives each one's `id`, `kind`, `file`, `line` and `lines`, with `evidence.lines` the total. For
 `duplicated_logic`, `targets` are the functions, and `evidence` has `clone_type` (exact, renamed,
 similar), `similarity`, `members[]` (`id`, `file`, `line`, `lines`, `tokens`) and `lines_saved`.
+For `same_entity`, `targets` are the class, table and API nodes, and `evidence` has `entity`,
+`similarity`, `members[]` (`id`, `kind`, `name`, `fields` as written, `normalized`, `used_by`) and
+`proposed_fields`.

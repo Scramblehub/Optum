@@ -76,3 +76,25 @@ TEST_CASE("sql: quoted identifiers are one name, spaces and schemas included") {
   t = sql_tables("SELECT * FROM `t3` JOIN [order details] ON 1");
   REQUIRE(t.reads == std::vector<std::string>{"t3", "order details"});
 }
+
+TEST_CASE("sql: columns per table, for finding entities") {
+  using Cols = std::vector<std::pair<std::string, std::vector<std::string>>>;
+  REQUIRE(sql_tables("CREATE TABLE IF NOT EXISTS customers (id INTEGER PRIMARY KEY, email TEXT NOT NULL, "
+                     "first_name VARCHAR(80), PRIMARY KEY (id), UNIQUE (email))").columns ==
+          Cols{{"customers", {"id", "email", "first_name"}}});
+  REQUIRE(sql_tables("INSERT INTO orders (customer_id, total, \"Status\") VALUES (?, ?, ?)").columns ==
+          Cols{{"orders", {"customer_id", "total", "Status"}}});
+  REQUIRE(sql_tables("UPDATE customers SET email = ?, phone = ? WHERE id = ?").columns ==
+          Cols{{"customers", {"email", "phone"}}});
+  REQUIRE(sql_tables("SELECT c.id, c.email, count(*) AS n, plan FROM customers c").columns ==
+          Cols{{"customers", {"id", "email", "plan"}}});
+  REQUIRE(sql_tables("SELECT o.id FROM orders o JOIN customers c ON 1").columns.empty());  // two tables
+  REQUIRE(sql_tables("SELECT * FROM orders").columns.empty());
+}
+
+TEST_CASE("sql: SQLite's INSERT OR REPLACE names the table after INTO") {
+  const auto t = sql_tables("INSERT OR REPLACE INTO bans(jail, ip, timeofban) VALUES(?, ?, ?)");
+  REQUIRE(t.writes == V{"bans"});
+  REQUIRE(t.columns == std::vector<std::pair<std::string, std::vector<std::string>>>{{"bans", {"jail", "ip", "timeofban"}}});
+  REQUIRE(sql_tables("INSERT OR IGNORE INTO tags (name) VALUES (?)").writes == V{"tags"});
+}

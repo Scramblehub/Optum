@@ -11,6 +11,7 @@ add_library(optum_core
   src/verify.cpp
   src/diagnose.cpp
   src/clones.cpp
+  src/entities.cpp
   src/sql.cpp
   src/http.cpp
   src/view.cpp
