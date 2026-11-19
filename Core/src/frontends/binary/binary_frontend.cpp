@@ -812,6 +812,7 @@ void BinaryAnalysis::emit(Graph& g, BinaryStats& stats, LibraryIndex& libs) cons
   }
   std::unordered_map<std::uint64_t, std::string> ids;
   std::unordered_set<std::string> added;
+  std::map<std::string, std::vector<std::string>> copies;  // id -> addresses of further copies
   // Exported functions by name: in position-independent code, calls between a library's own
   // exported functions go through its PLT, as if they were imports.
   std::unordered_map<std::string, std::uint64_t> exported;
@@ -841,9 +842,13 @@ void BinaryAnalysis::emit(Graph& g, BinaryStats& stats, LibraryIndex& libs) cons
     n.confidence = fn.gap ? Confidence::Inferred : Confidence::Exact;
     n.attrs = {{"size", fn.end - a}, {"found", fn.found}, {"address", hex(a)}, {"binary", rel_}};
     if (fn.is_static) n.attrs["static"] = true;
-    // Copies of one source function (a static inline in a header, emitted in several files)
-    // share an id and become one node.
-    if (!added.insert(id).second) continue;
+    // Copies of one source function (a static inline in a header, or a .c file #included into
+    // another, compiled in several files) share an id and become one node; attrs.copies lists
+    // the other addresses.
+    if (!added.insert(id).second) {
+      copies[id].push_back(hex(a));
+      continue;
+    }
     g.add_node(std::move(n));
     Edge e;
     e.from = *g.find(mod_id);
@@ -851,6 +856,15 @@ void BinaryAnalysis::emit(Graph& g, BinaryStats& stats, LibraryIndex& libs) cons
     e.kind = EdgeKind::Defines;
     e.frontend = "binary";
     g.add_edge(std::move(e));
+  }
+
+  for (auto& [id, addrs] : copies) {
+    Node extra;  // merged into the existing node: only attrs.copies is new
+    extra.id = id;
+    extra.kind = NodeKind::Function;
+    extra.confidence = Confidence::Inferred;  // merging keeps the stronger: this never upgrades it
+    extra.attrs = {{"copies", addrs}};
+    g.add_node(std::move(extra));
   }
 
   // Imports: the libraries named in DT_NEEDED, and the functions called from them.

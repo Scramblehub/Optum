@@ -22,6 +22,8 @@ never linked into Optum.
 |---|---|---|---|
 | [zlib](https://github.com/madler/zlib) | v1.3.1 | Zlib | `libz.so`, `minigzip`, `example` |
 | [cJSON](https://github.com/DaveGamble/cJSON) | v1.7.18 | MIT | `libcjson.so`, `cjson_test` |
+| [lz4](https://github.com/lz4/lz4) | v1.11.1 | BSD-2-Clause (lib/) | `liblz4.so`, `lz4_frame`, `lz4_file` (sealed test data) |
+| [parson](https://github.com/kgabis/parson) | `ec53fb6` (no release tags) | MIT | `libparson.so`, `parson_tests` (sealed test data) |
 | sqlite (optional, downloaded and SHA3-checked, not a submodule) | 3.54.1 | public domain | `libsqlite3.so`, local runs only |
 
 Planned: a SQL grammar, capstone (`exp/frontend-binary`).

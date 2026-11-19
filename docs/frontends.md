@@ -180,8 +180,9 @@ operands, masked bytes, referenced string literals and call targets, as JSON.
 - **Paths:** relative paths are used as recorded (builds with `-ffile-prefix-map`). Absolute paths
   are made relative to the analysed directory when the source lies under it, and kept absolute
   otherwise.
-- **One node per body:** copies of one source function (a header's `static inline`) share one node,
-  and two names folded onto one body get one node.
+- **One node per body:** copies of one source function (a header's `static inline`, or a `.c` file
+  `#include`d into another) share one node, with the other copies' addresses in `attrs.copies`;
+  two names folded onto one body get one node.
 - **Malformed debug info:** the binary is analysed without it, with a message.
 
 An unoptimised debug build therefore merges node for node with the C frontend's graph of its source,
