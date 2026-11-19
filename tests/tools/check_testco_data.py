@@ -22,3 +22,18 @@ with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
     inv = [r for r in recs("accounting").values() if r.get("type") == "invoice"]
     assert inv and all(r["regulated"] == "tax" for r in inv), "invoices are tax documents"
 print("testco data: deterministic, traps in place")
+
+# Regulated records: the fingerprint sees any change to a tax document (check_regulated.py).
+sys.path.insert(0, os.path.join(os.path.dirname(GEN)))
+from check_regulated import compare, fingerprint  # noqa: E402
+move = {"name": "INV/2026/00001", "move_type": "out_invoice", "state": "posted", "partner_id": [7, "A"],
+        "invoice_date": "2026-11-19", "currency_id": [144, "GBP"], "amount_untaxed": 36.67, "amount_tax": 7.33,
+        "amount_total": 44.0, "ref": "order 5000"}
+lines = [{"id": 2, "name": "Mug", "quantity": 2, "price_unit": 12.0, "tax_ids": [1], "price_subtotal": 20.0, "price_total": 24.0},
+         {"id": 1, "name": "Tee", "quantity": 1, "price_unit": 20.0, "tax_ids": [1], "price_subtotal": 16.67, "price_total": 20.0}]
+fp = fingerprint(move, lines)
+assert fp == fingerprint(dict(move), list(reversed(lines))), "stable: line order as stored, not as read"
+assert fp != fingerprint({**move, "amount_total": 1.0}, lines), "a changed total"
+assert fp != fingerprint(move, [{**lines[0], "price_unit": 1.0}, lines[1]]), "a changed line price"
+assert compare({"A": "x", "B": "y", "C": "z"}, {"A": "x", "B": "Y"}) == {"changed": ["B"], "missing": ["C"]}
+print("regulated fingerprints: any change to a tax document is seen")
