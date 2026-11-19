@@ -73,7 +73,7 @@ TEST_CASE("versions: same major.minor accepted, others rejected") {
   json j = doc(json::array());
   j["ir_version"] = "0.1.99";
   REQUIRE_NOTHROW(graph_from_json(j));
-  for (const char* v : {"0.2.0", "1.1.0", "0.1", "banana"}) {
+  for (const char* v : {"0.2.0", "1.1.0", "0.1", "banana", "0.1.", "0.1.x", "0.1.0-rc1", "0.1.0.0"}) {
     j["ir_version"] = v;
     REQUIRE_THROWS_WITH(graph_from_json(j), ContainsSubstring("ir_version"));
   }
@@ -81,4 +81,13 @@ TEST_CASE("versions: same major.minor accepted, others rejected") {
 
 TEST_CASE("load_graph reports missing files") {
   REQUIRE_THROWS_WITH(load_graph("/no/such/file.json"), ContainsSubstring("cannot open"));
+}
+
+TEST_CASE("an empty or one-character address is an error, not undefined behaviour") {
+  for (const char* a : {"", "0", "x", "0x"}) {
+    REQUIRE_THROWS_WITH(
+        graph_from_json(doc({{{"id", "a"}, {"kind", "function"},
+                              {"loc", {{"file", "x"}, {"address", a}}}}})),
+        ContainsSubstring("nodes[0].loc.address"));
+  }
 }
