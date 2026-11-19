@@ -41,8 +41,12 @@ Ids are the graph's node ids. Self-calls are ignored, and repeated pairs count o
 | How | `sys.setprofile`, every call, in-process | V8 CPU profiles: sampled, so rare calls can be missed |
 | Counted | every call made by a call instruction, direct or indirect (callbacks, dispatch tables, `getattr`) | parent → child frames of the project's named functions |
 | Left out | class bodies running, operators, property access: not calls in the source | getters and setters; frames not at a function's start |
-| Constructors | `Cls()` → the class; `super().__init__()` → that `__init__` | a constructor frame → its class, unless the graph has an explicit `super(...)` call; an implicit constructor (a class without one) → that class, and its implicit `super(...)` is left out |
+| Constructors | `Cls()` → the class; `super().__init__()` → that `__init__` | a constructor frame → its class, unless the graph has an explicit `super(...)` call |
 | Ids | as the Python frontend names them, `@def` included | from the graph, by file and line |
+
+In JavaScript, a class without a constructor runs an implicit one: its frame counts as the class
+(`new Sub()`), and the base constructor it calls (an implicit `super(...)`, not in the source) is
+left out.
 
 Known limit: in Python, `init = super().__init__; init(...)` is recorded as a call to the class.
 
