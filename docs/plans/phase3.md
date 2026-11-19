@@ -110,6 +110,33 @@ window or a 30-day trash shows in the traffic; the spec picks it up. What only t
 ("we never delete tickets") comes from a short questionnaire per stage, recorded in the spec with
 the company as its evidence.
 
+## What it costs
+
+Replacing a tool is only worth it if owning it costs less, everything counted, and owning is easy
+to undercount: hosting, backups, security and, above all, the people who keep it running. So
+cost is measured in every stage, and it can make a tool a **keep** just as a hidden algorithm can.
+
+Counted per stage, over several years:
+
+| Side | Costs | How the number is got |
+|---|---|---|
+| The SaaS today | subscription (seats, tier), usage overages, add-ons, integration tools (Zapier tasks), staff time its quirks cost | the company's bills; the observed usage (seats, calls, records) |
+| Owning: running | compute, database, storage and its growth, backups (copies kept for the retention period), data transfer, monitoring and logs | **measured in the test company**: each replacement's CPU, memory, storage per 1,000 records, backup size; priced at a real host's rates |
+| Owning: securing | encryption, secrets, patching, vulnerability scans, access reviews, audits (GDPR records; SOC 2 if the company needs it) | tooling costs, and hours per month |
+| Owning: people | maintenance, upgrades, on-call, staff support | hours per month per service: an assumption the company sets |
+| One-time | building or generating it, migrating, the parallel period, training | the stage's actual effort |
+| Risk | an outage or data loss, times its likelihood | the drills' results; the company's cost of an hour of downtime |
+
+Each stage has a **business case before it starts and a measured one after**: the yearly cost of
+each side, break-even, and what would flip the decision (staff hours doubling, data growing ten
+times). A tool whose owned cost doesn't beat the SaaS by a margin is kept, and the report says why.
+
+Shared costs are counted as shared: eight tools on one platform means one database, one backup
+system, one monitoring setup, so each stage costs less than the last; the model shows that
+instead of pricing each tool as if it stood alone. And people are the largest risk: for a small
+company, a few hours a month of upkeep can outweigh a $50 subscription, an honest reason to keep
+a cheap tool or group it into another stage.
+
 ## Each stage, in five steps
 
 Every replaced service goes through the same steps, and moves on only when the step's checks
@@ -160,12 +187,14 @@ retired**.
 | 5 | `feat/unified-model` | One company graph: shared entities across tools; what each tool is actually used for; which to keep and why; the stage order | 1 week |
 | 6 | `feat/coexist-sync` | Two-way sync between the owned system and the remaining tools, by identity; the record-matching measurement against the ground truth | 1–2 weeks |
 | 7 | `feat/platform` | The standards filled in for what can't be seen (storage, backups, audit log and revert, idempotency, roles, retention, GDPR, security, monitoring, migrations) and their drills | 2 weeks |
+| 7b | `feat/cost-model` | Resource measurement per replacement in the test company (CPU, memory, storage per 1,000 records, backups); the cost model (both sides, shared costs, one-time, risk) and each stage's business case, before and after | 1 week |
 | 8 | `feat/stage-runner` | The five steps as a harness: shadow, parallel with replay comparison and daily reconciliation, switch, fallback, retire; contract tests for the kept services; rollback | 1–2 weeks |
 | 9 | `feat/stage-1-glue`, `feat/stage-2-...` | The owned replacements, built from each spec on the platform, one stage at a time | 1 week each |
 
 **Gate v0.3:** stages 1 and 2 go through all five steps in the test company with every check
 green, including one rehearsed rollback; their specs learned without reading the stand-ins'
-source, and the replay agreeing; the platform drills passing; the later stages are planned with their order and
+source, and the replay agreeing; the platform drills passing; the measured cost of each stage set
+against the SaaS it replaces, with the decision it supports; the later stages are planned with their order and
 checks; before/after numbers reported (services paid for, places a customer is kept, lines of
 glue). Stages 3 to 7 continue after v0.3.
 
@@ -175,6 +204,9 @@ glue). Stages 3 to 7 continue after v0.3.
   ten containers (roughly 8–12 GB of memory; this machine has 62 GB). Either you install Docker
   locally, or it runs in CI only; local is far better for building it.
 - **The two kept services:** payments and accounting, or another pair.
+- **Cost assumptions:** staff hours per service and the company's cost of an hour of downtime are
+  assumptions in the model; the interviews should give real ones, and a hosting provider to price
+  against.
 - **The stand-ins:** the ones above unless the interviews point elsewhere; swapping one later
   costs only its adapter.
 
