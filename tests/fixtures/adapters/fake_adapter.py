@@ -1,7 +1,7 @@
 """An adapter that misbehaves on purpose, to test how Optum handles it.
 
 Usage: fake_adapter.py <mode> describe|extract
-Modes: ok, bad_protocol, crash, not_json, bad_graph, slow
+Modes: ok, patch_protocol, bad_protocol, newer_minor, crash, not_json, bad_graph, slow
 """
 import json
 import sys
@@ -9,7 +9,11 @@ import time
 
 mode, request = sys.argv[1], sys.argv[2]
 if request == "describe":
-    proto = "optum-frontend/9.0" if mode == "bad_protocol" else "optum-frontend/0.1"
+    proto = {
+        "bad_protocol": "optum-frontend/9.0",
+        "newer_minor": "optum-frontend/0.2",
+        "patch_protocol": "optum-frontend/0.1.7",
+    }.get(mode, "optum-frontend/0.1")
     print(json.dumps({"protocol": proto, "name": "fake-" + mode, "file_patterns": ["*.fake"]}))
     sys.exit(0)
 

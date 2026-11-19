@@ -44,12 +44,13 @@ std::unique_ptr<Frontend> make_c_frontend(unsigned threads = 0);
 std::unique_ptr<Frontend> make_external_frontend(const std::string& command,
                                                  std::chrono::milliseconds timeout);
 
-// Every regular file under `path` (or `path` itself), relative to the returned root, sorted.
-// Skips hidden directories, __pycache__, node_modules, venv and site-packages.
 struct Discovery {
   std::filesystem::path root;
-  std::vector<std::filesystem::path> files;
+  std::vector<std::filesystem::path> files;  // relative to root, sorted
 };
+
+// Every regular file under `path` (or `path` itself), relative to the returned root, sorted.
+// Skips hidden directories, __pycache__, node_modules, venv and site-packages.
 Discovery discover(const std::filesystem::path& path);
 
 bool matches_any(const std::vector<std::string>& patterns, const std::filesystem::path& rel);

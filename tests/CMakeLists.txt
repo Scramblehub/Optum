@@ -185,6 +185,8 @@ if(Python3_FOUND)
   set(FAKE "${Python3_EXECUTABLE} ${FIXTURES}/adapters/fake_adapter.py")
   set(ADAPTER_DIR ${FIXTURES}/adapters)
   foreach(case "ok|fake adapter ran"
+               "patch_protocol|fake adapter ran"
+               "newer_minor|speaks protocol 'optum-frontend/0.2'"
                "bad_protocol|speaks protocol 'optum-frontend/9.0'"
                "crash|exited with status 3; last output:.something broke"
                "not_json|stdout is not JSON"

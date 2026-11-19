@@ -106,6 +106,15 @@ std::string tail(const std::string& s, std::size_t max_lines) {
   return s.substr(pos + 1);
 }
 
+// "optum-frontend/0.1.3" -> "optum-frontend/0.1": adapters may differ in patch, nothing else.
+// A version with fewer than two dot-separated parts is returned whole.
+std::string_view protocol_major_minor(std::string_view v) {
+  const auto first = v.find('.');
+  if (first == std::string_view::npos) return v;
+  const auto second = v.find('.', first + 1);
+  return second == std::string_view::npos ? v : v.substr(0, second);
+}
+
 class ExternalFrontend : public Frontend {
  public:
   ExternalFrontend(const std::string& command, std::chrono::milliseconds timeout)
@@ -120,7 +129,7 @@ class ExternalFrontend : public Frontend {
     const nlohmann::json& proto = field("protocol");
     if (!proto.is_string()) fail("describe: 'protocol' must be a string");
     const std::string p = proto.get<std::string>();
-    if (p.substr(0, p.rfind('.')) != kProtocolVersion.substr(0, kProtocolVersion.rfind('.'))) {
+    if (protocol_major_minor(p) != protocol_major_minor(kProtocolVersion)) {
       fail("speaks protocol '" + p + "', this build speaks " + std::string(kProtocolVersion));
     }
     const nlohmann::json& name = field("name");
