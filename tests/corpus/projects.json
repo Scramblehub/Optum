@@ -1,0 +1,48 @@
+{
+  "about": "The binary reference corpus (docs/plans/binary.md, stage 2). Each project is built at every optimisation level, in three forms, with an answer key. Paths are relative to the repo root. Build: python3 tests/tools/build_corpus.py --out <dir>.",
+  "opt_levels": ["-O0", "-O1", "-O2", "-O3", "-Os"],
+  "projects": [
+    {
+      "name": "samples",
+      "root": "tests/fixtures/programs/c",
+      "binaries": [
+        { "name": "basic", "kind": "exe", "sources": ["basic/main.c"] },
+        { "name": "multi", "kind": "exe", "sources": ["multi/src/util.c", "multi/src/app.c"] }
+      ]
+    },
+    {
+      "name": "zlib",
+      "root": "External_Libraries/corpus/zlib",
+      "cflags": ["-I."],
+      "library": ["adler32.c", "compress.c", "crc32.c", "deflate.c", "gzclose.c", "gzlib.c", "gzread.c",
+                  "gzwrite.c", "infback.c", "inffast.c", "inflate.c", "inftrees.c", "trees.c", "uncompr.c", "zutil.c"],
+      "binaries": [
+        { "name": "libz.so", "kind": "shared", "sources": ["@library"] },
+        { "name": "minigzip", "kind": "exe", "sources": ["@library", "test/minigzip.c"] },
+        { "name": "example", "kind": "exe", "sources": ["@library", "test/example.c"] }
+      ]
+    },
+    {
+      "name": "cJSON",
+      "root": "External_Libraries/corpus/cJSON",
+      "cflags": ["-I."],
+      "binaries": [
+        { "name": "libcjson.so", "kind": "shared", "sources": ["cJSON.c", "cJSON_Utils.c"], "libs": ["-lm"] },
+        { "name": "cjson_test", "kind": "exe", "sources": ["cJSON.c", "test.c"], "libs": ["-lm"] }
+      ]
+    },
+    {
+      "name": "sqlite",
+      "optional": "--with-sqlite",
+      "download": {
+        "url": "https://www.sqlite.org/2026/sqlite-amalgamation-3540100.zip",
+        "sha3_256": "92281c86e2957f9b9305890f9ac04204caa7b677cc868dc326d942689df28e30",
+        "strip_dir": "sqlite-amalgamation-3540100"
+      },
+      "cflags": ["-I.", "-DSQLITE_THREADSAFE=0", "-DSQLITE_OMIT_LOAD_EXTENSION"],
+      "binaries": [
+        { "name": "libsqlite3.so", "kind": "shared", "sources": ["sqlite3.c"] }
+      ]
+    }
+  ]
+}

@@ -202,6 +202,26 @@ if(Python3_FOUND)
   set_tests_properties(adapter_missing_command PROPERTIES PASS_REGULAR_EXPRESSION "adapter '/no/such/adapter': cannot run")
 endif()
 
+# The binary reference corpus (docs/plans/binary.md, stage 2; tests/corpus/README.md): built once
+# by corpus_build, then checked. Building it needs gcc and binutils and takes a few seconds.
+if(Python3_FOUND AND GCC)
+  set(CORPUS_DIR ${CMAKE_BINARY_DIR}/corpus)
+  set(TOOLS ${CMAKE_CURRENT_SOURCE_DIR}/tools)
+  add_test(NAME corpus_build COMMAND ${Python3_EXECUTABLE} ${TOOLS}/build_corpus.py --out ${CORPUS_DIR})
+  set_tests_properties(corpus_build PROPERTIES FIXTURES_SETUP corpus TIMEOUT 600)
+  add_test(NAME corpus_answer_keys COMMAND ${Python3_EXECUTABLE} ${TOOLS}/build_corpus.py --out ${CORPUS_DIR} --check)
+  # Symbols in the symbols-only form must match the answer keys exactly (checks the keys).
+  add_test(NAME corpus_symbols_baseline
+           COMMAND ${Python3_EXECUTABLE} ${TOOLS}/score_functions.py --corpus ${CORPUS_DIR} --baseline symbols
+                   --min-precision 1 --min-recall 1)
+  # gcc's unwind tables give every function start, even stripped: a binary frontend must match it.
+  add_test(NAME corpus_eh_frame_baseline
+           COMMAND ${Python3_EXECUTABLE} ${TOOLS}/score_functions.py --corpus ${CORPUS_DIR} --baseline eh_frame
+                   --form stripped --min-recall 1)
+  set_tests_properties(corpus_answer_keys corpus_symbols_baseline corpus_eh_frame_baseline PROPERTIES
+                       FIXTURES_REQUIRED corpus)
+endif()
+
 if(NOT Python3_FOUND OR NO_JSONSCHEMA)
   message(STATUS "Python jsonschema not found: skipping schema tests (pip install jsonschema)")
 endif()

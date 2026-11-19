@@ -30,3 +30,11 @@
 	path = External_Libraries/tree-sitter-c
 	url = https://github.com/tree-sitter/tree-sitter-c.git
 	shallow = true
+[submodule "External_Libraries/corpus/zlib"]
+	path = External_Libraries/corpus/zlib
+	url = https://github.com/madler/zlib.git
+	shallow = true
+[submodule "External_Libraries/corpus/cJSON"]
+	path = External_Libraries/corpus/cJSON
+	url = https://github.com/DaveGamble/cJSON.git
+	shallow = true
