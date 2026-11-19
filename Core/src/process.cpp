@@ -25,13 +25,29 @@ ProcessResult run_process(const std::vector<std::string>& argv, const std::strin
                           std::chrono::milliseconds timeout) {
   if (argv.empty()) throw IrError("empty command");
   int in[2], out[2], err[2];
-  if (pipe(in) || pipe(out) || pipe(err)) throw IrError(std::string("pipe: ") + std::strerror(errno));
-  // A pipe to report exec failure: closed on successful exec (O_CLOEXEC), written on failure.
   int status_pipe[2];
-  if (pipe2(status_pipe, O_CLOEXEC)) throw IrError(std::string("pipe: ") + std::strerror(errno));
+  {
+    // Open every pipe, closing the ones already open if a later one fails. The last is a pipe to
+    // report exec failure: closed on successful exec (O_CLOEXEC), written on failure.
+    int* const all[4] = {in, out, err, status_pipe};
+    for (int i = 0; i < 4; ++i) {
+      if ((i < 3 ? pipe(all[i]) : pipe2(all[i], O_CLOEXEC)) == 0) continue;
+      const int e = errno;
+      for (int j = 0; j < i; ++j) {
+        close(all[j][0]);
+        close(all[j][1]);
+      }
+      throw IrError(std::string("pipe: ") + std::strerror(e));
+    }
+  }
 
   const pid_t pid = fork();
-  if (pid < 0) throw IrError(std::string("fork: ") + std::strerror(errno));
+  if (pid < 0) {
+    const int e = errno;
+    for (int fd : {in[0], in[1], out[0], out[1], err[0], err[1], status_pipe[0], status_pipe[1]})
+      close(fd);
+    throw IrError(std::string("fork: ") + std::strerror(e));
+  }
   if (pid == 0) {
     dup2(in[0], 0);
     dup2(out[1], 1);
@@ -105,7 +121,18 @@ ProcessResult run_process(const std::vector<std::string>& argv, const std::strin
   close_fd(fd_out);
   close_fd(fd_err);
   int status = 0;
-  waitpid(pid, &status, 0);
+  while (!r.timed_out) {
+    const pid_t w = waitpid(pid, &status, WNOHANG);
+    if (w == pid) break;
+    if (w < 0 && errno != EINTR) break;  // not ours any more: nothing to wait for
+    if (std::chrono::steady_clock::now() >= deadline) {
+      r.timed_out = true;
+      kill(pid, SIGKILL);
+    } else {
+      usleep(2000);
+    }
+  }
+  if (r.timed_out) waitpid(pid, &status, 0);  // SIGKILLed, so this returns promptly
   if (!r.timed_out && WIFEXITED(status)) r.exit_code = WEXITSTATUS(status);
   return r;
 }
