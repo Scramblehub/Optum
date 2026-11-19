@@ -31,7 +31,10 @@ namespace {
 
 namespace fs = std::filesystem;
 using frontends::parallel_for;
+using frontends::http_external_node;
 using frontends::read_file;
+using frontends::sql_store_node;
+using frontends::to_upper;
 
 // ===================================================================== pass 1 data
 
@@ -832,11 +835,7 @@ class Linker {
     const SqlTables t = sql_tables(*sql);
     if (t.reads.empty() && t.writes.empty()) return false;
     auto store = [&](const std::string& table, EdgeKind kind) {
-      Node n;
-      n.id = sql_store_id(table);
-      n.kind = NodeKind::Store;
-      n.name = table;
-      n.frontend = "python";
+      Node n = sql_store_node(sql_store_id(table), table, "python");
       std::string to = n.id;  // copied first: argument evaluation order is unspecified
       emit(id(cs.scope), std::move(to), kind, Confidence::Exact, cs.line, nlohmann::json::object(), std::move(n));
     };
@@ -860,15 +859,9 @@ class Linker {
     if (!s) return;
     const std::string node_id = http_node_id(*s);
     if (node_id.empty()) return;
-    const Confidence c = node_id.find("{}") == std::string::npos ? Confidence::Exact : Confidence::Inferred;
-    std::string upper = method;
-    for (char& ch : upper) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
-    Node n;
-    n.id = node_id;
-    n.kind = NodeKind::External;
-    n.name = node_id.substr(5);
-    n.frontend = "python";
-    n.confidence = c;
+    Node n = http_external_node(node_id, "python");
+    const Confidence c = n.confidence;
+    const std::string upper = to_upper(method);
     emit(id(cs.scope), node_id, kind, c, cs.line, {{"method", upper}}, std::move(n));
   }
 };
