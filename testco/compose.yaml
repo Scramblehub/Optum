@@ -1,13 +1,14 @@
 # The test company (docs/plans/phase3.md): stand-ins for a small retailer's ten services.
 # Slice 1: the two kept services (payments, accounting) and the automation glue (n8n).
 # Every port is bound to 127.0.0.1: nothing here is reachable from outside this machine.
+# The tools publish no ports: everything reaches them through `observe`, the recording proxy,
+# so all their traffic is recorded (recordings/<tool>.jsonl; observe/record.py).
 name: testco
 
 services:
   # Kept service 1: payments. Stripe's own mock of its API (no real money, no account needed).
   payments:
     image: stripe/stripe-mock:v0.197.0
-    ports: ["127.0.0.1:12111:12111"]
 
   # Kept service 2: accounting and tax filing. Odoo with the Invoicing/Accounting app.
   accounting-db:
@@ -32,7 +33,6 @@ services:
       PASSWORD: odoo
     # A database named testco with the accounting app, created on first start; no demo data.
     command: ["odoo", "-d", "testco", "-i", "account", "--without-demo=all", "--db-filter=^testco$"]
-    ports: ["127.0.0.1:8069:8069"]
     volumes: [accounting-data:/var/lib/odoo]
     healthcheck:
       test: ["CMD-SHELL", "curl -fs http://localhost:8069/web/health || exit 1"]
@@ -48,12 +48,27 @@ services:
       N8N_DIAGNOSTICS_ENABLED: "false"
       N8N_PERSONALIZATION_ENABLED: "false"
       N8N_RUNNERS_ENABLED: "true"
-    ports: ["127.0.0.1:5678:5678"]
     volumes: [automation-data:/home/node/.n8n]
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5678/healthz || exit 1"]  # localhost is ::1 here; n8n listens on IPv4
       interval: 5s
       retries: 30
+
+  # The recording proxy (docs/plans/phase3.md, feat/observe): mitmproxy in reverse mode, one port
+  # per tool, recording every exchange with secrets redacted.
+  observe:
+    image: mitmproxy/mitmproxy:11.1.3
+    depends_on: [payments, accounting, automation]
+    command: >-
+      mitmdump --set block_global=false --set connection_strategy=lazy
+      --mode reverse:http://payments:12111@12111
+      --mode reverse:http://accounting:8069@8069
+      --mode reverse:http://automation:5678@5678
+      -s /observe/addon.py
+    environment:
+      RECORDINGS_DIR: /recordings
+    ports: ["127.0.0.1:12111:12111", "127.0.0.1:8069:8069", "127.0.0.1:5678:5678"]
+    volumes: ["./observe:/observe:ro", "./recordings:/recordings"]
 
 volumes:
   accounting-db:
