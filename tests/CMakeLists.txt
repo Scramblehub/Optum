@@ -23,6 +23,7 @@ file(GLOB IR_SCHEMA_INVALID ${FIXTURES}/ir/invalid/schema_*.json)
 # The CLI as a whole: runs the real binary.
 add_test(NAME cli_version COMMAND optum --version)
 set_tests_properties(cli_version PROPERTIES PASS_REGULAR_EXPRESSION "^0\\.0\\.1")
+include(${CMAKE_CURRENT_SOURCE_DIR}/cli_tests.cmake)
 add_test(NAME cli_graph_missing_path COMMAND optum graph /no/such/path)
 set_tests_properties(cli_graph_missing_path PROPERTIES WILL_FAIL TRUE)
 add_test(NAME cli_graph_emits_json COMMAND optum graph -q ${CMAKE_SOURCE_DIR}/README.md)
