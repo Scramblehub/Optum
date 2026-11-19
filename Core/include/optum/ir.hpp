@@ -118,4 +118,11 @@ Graph graph_from_json(const nlohmann::json& j);
 // Reads and parses a JSON graph file. Throws IrError on I/O, parse or validation errors.
 Graph load_graph(const std::string& path);
 
+// Serialises JSON for output. Text from binaries and source files isn't always valid UTF-8
+// (symbol names, Latin-1 string constants, file names): invalid bytes become U+FFFD instead of
+// aborting the whole run.
+inline std::string dump_json(const nlohmann::json& j, int indent = -1) {
+  return j.dump(indent, ' ', false, nlohmann::json::error_handler_t::replace);
+}
+
 }  // namespace optum

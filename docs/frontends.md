@@ -118,6 +118,42 @@ a header is a node of the header.
 Binaries (`docs/plans/binary.md`) map functions with debug info to these same `c:` ids, so a
 binary's graph can be scored against, and merged with, its source graph.
 
+## Binaries (ELF, x86-64)
+
+Files are found by content (the ELF magic), not by name: executables and shared libraries. Object
+files, other architectures and malformed files are skipped with a message. Plan:
+[plans/binary.md](plans/binary.md); ids and confidence: [decision 0005](decisions/0005-binaries.md).
+
+| Thing | Node | Id example |
+|---|---|---|
+| The binary | `program` (it has an interpreter, PIE included) or `module` (a shared library); `attrs.soname` | `bin:minigzip`, `bin:libz.so` |
+| A function with a symbol | `function`, `loc.address`, `attrs.size`, `attrs.found` | `bin:minigzip!gz_compress` (`!name@0x…` when two share a name) |
+| A function without one | `function`, `confidence: inferred` if found only by the gap rule | `bin:minigzip!0x4a20` |
+| A library from `DT_NEEDED` | `module`, `attrs.third_party` | `lib:libc.so.6` |
+| An imported function | `function`, `attrs.imported` | `lib:libc.so.6!printf` |
+
+**Where functions come from** (`attrs.found`), best evidence first: `symbol` (`.symtab`) or
+`export` (`.dynsym`), `eh_frame` (unwind entries), `entry`, `init_array`, `address_taken`
+(pointers stored in data, from relocations), `call_target` (direct calls), and last `gap`: after a
+function's final instruction (`ret`, `jmp`, `hlt`, `ud2`, or a call to a no-return import such as
+`exit` or `__stack_chk_fail`) and its padding, the next instruction starts a function, unless:
+- it lies inside a known symbol's or unwind entry's extent;
+- code of the same function jumps there (direct jumps, conditional jumps, and `switch` jump tables:
+  `lea r, [rip+table]` before an indirect `jmp`, with 32-bit offsets from the table);
+- the binary marks function entries with `endbr64` (`-fcf-protection`) and this code doesn't
+  start with it, and isn't jumped to from elsewhere (split-off `.cold` pieces are).
+
+| Code | Edge |
+|---|---|
+| Binary contains function; library contains imported function | `defines` |
+| Binary needs library | `imports` |
+| `call f` / `jmp f` to a function start (a tail call: `attrs.via: "tail_call"`) | `calls` |
+| `call` / `jmp` through a PLT stub or a GOT slot | `calls` to `lib:<library>!<name>`. The library is the one its symbol version names (`GLIBC_2.2.5` → `libc.so.6`), else the only `DT_NEEDED`, else `lib:?` |
+| A PLT call to a function the binary exports itself (normal in shared libraries) | `calls` to that local function, `attrs.via: "plt"` |
+| Calls through registers or memory without a known target | none yet |
+
+Source ids (`c:file#fn`) from debug info aren't produced yet: `bin:` ids are used in every form.
+
 ## Known gaps (0.1)
 
 - No `extends` edge for inheritance: the graph can't yet say "Square is a Shape". Candidate for
@@ -128,5 +164,7 @@ binary's graph can be scored against, and merged with, its source graph.
   (`#define zmemcpy memcpy`) aren't followed; C++ isn't supported (a `.h` may hold C++).
 - JS: object-literal methods aren't nodes; `axios.create({ baseURL })` clients and `tsconfig.json`
   path aliases aren't followed; destructured parameters don't get types from their annotation.
+- Binaries: no debug-info reader yet (source ids); no indirect call targets; x86-64 ELF only; no C++
+  demangling.
 - n8n: Code nodes' JavaScript and raw SQL queries aren't analysed; sub-workflow calls
   (`executeWorkflow`) aren't linked to the called workflow yet.

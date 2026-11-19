@@ -44,7 +44,9 @@ That's 35 binaries without sqlite.
     source graph;
   - pieces GCC splits off or clones when optimising (`gz_compress.cold`, `.part.0`, `.isra.0`,
     `.constprop.0`, `.localalias`) have `fragment` set and their parent function's source id;
-  - C runtime startup code has `origin: "runtime"`.
+  - size-0 function symbols in code sections are included (the C runtime's `frame_dummy` and
+    friends are real code); C runtime code has `origin: "runtime"` and no source id: a function is
+    in the project only if its source file exists in the project.
 - **`calls`:** the direct calls the compiler emitted at that level (GCC `-fcallgraph-info`),
   between the binary's own functions, as source ids. Calls that were inlined are gone, as they are
   in the machine code.
@@ -56,9 +58,13 @@ That's 35 binaries without sqlite.
 | Function starts from | Form | Precision | Recall |
 |---|---|---|---|
 | `.symtab` | symbols | 100% | 100% (the answer keys agree with the binaries) |
-| `.eh_frame` | stripped | 96.9% | **100%** |
+| `.eh_frame` | stripped | 96.9% | **95.9%** |
 | `.eh_frame` | bare | — | **0%** |
 
-gcc's unwind tables alone recover every function start of a stripped x86-64 binary; the few extra
-"starts" are the PLT import stubs. So **finding functions in `stripped` binaries is not a real
-test**: the `bare` form is, and so is everything past function starts (calls, imports, identities).
+gcc's unwind tables alone recover nearly every function start of a stripped x86-64 binary: all but
+the C runtime's size-0 functions (`frame_dummy`, `register_tm_clones`), and the few extra "starts"
+are the PLT import stubs. So **finding functions in `stripped` binaries is not a real test**: the
+`bare` form is, and so is everything past function starts (calls, imports, identities).
+
+Optum's binary frontend on the same corpus: `tests/tools/score_binary.py`
+([results](../../docs/notes/2026-11-18-binary-elf-eval.md)).

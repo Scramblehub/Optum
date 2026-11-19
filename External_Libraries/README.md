@@ -13,6 +13,7 @@ After cloning: `git submodule update --init --depth 1`.
 | [tree-sitter-javascript](https://github.com/tree-sitter/tree-sitter-javascript) | v0.25.0 | MIT | JavaScript + JSX grammar (ABI 15) |
 | [tree-sitter-typescript](https://github.com/tree-sitter/tree-sitter-typescript) | v0.23.2 | MIT | TypeScript and TSX grammars (ABI 14) |
 | [tree-sitter-c](https://github.com/tree-sitter/tree-sitter-c) | v0.24.2 | MIT | C grammar (ABI 15) |
+| [capstone](https://github.com/capstone-engine/capstone) | 5.0.9 | BSD-3-Clause | x86-64 disassembly for the binary frontend (built x86-only) |
 
 **Binary corpus sources** (`corpus/`): compiled by `tests/tools/build_corpus.py` into test binaries,
 never linked into Optum.

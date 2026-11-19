@@ -38,3 +38,7 @@
 	path = External_Libraries/corpus/cJSON
 	url = https://github.com/DaveGamble/cJSON.git
 	shallow = true
+[submodule "External_Libraries/capstone"]
+	path = External_Libraries/capstone
+	url = https://github.com/capstone-engine/capstone.git
+	shallow = true

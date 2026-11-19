@@ -19,7 +19,7 @@ namespace {
 
 int write_json(const nlohmann::json& j, const std::string& out_path, int indent) {
   if (out_path.empty() || out_path == "-") {
-    std::cout << j.dump(indent) << "\n";
+    std::cout << optum::dump_json(j, indent) << "\n";
     return 0;
   }
   std::ofstream out(out_path);
@@ -27,7 +27,7 @@ int write_json(const nlohmann::json& j, const std::string& out_path, int indent)
     std::cerr << "optum: cannot write " << out_path << "\n";
     return 2;
   }
-  out << j.dump(indent) << "\n";
+  out << optum::dump_json(j, indent) << "\n";
   return 0;
 }
 
@@ -133,6 +133,7 @@ std::vector<std::unique_ptr<optum::Frontend>> make_frontends(const std::vector<s
   out.push_back(optum::make_python_frontend(threads));
   out.push_back(optum::make_js_frontend(threads));
   out.push_back(optum::make_c_frontend(threads));
+  out.push_back(optum::make_binary_frontend());
   for (const auto& cmd : adapters) {
     out.push_back(optum::make_external_frontend(cmd, std::chrono::seconds(timeout_s)));
   }
@@ -293,7 +294,7 @@ int main(int argc, char** argv) {
     if (*score) {
       const auto report = optum::score(optum::load_graph(expected_path),
                                        optum::load_graph(produced_path));
-      if (score_json) std::cout << optum::to_json(report).dump(indent) << "\n";
+      if (score_json) std::cout << optum::dump_json(optum::to_json(report), indent) << "\n";
       else std::cout << optum::to_text(report);
       const bool pass = report.edges.precision() >= min_precision &&
                         report.edges.recall() >= min_recall;

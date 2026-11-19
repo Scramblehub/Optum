@@ -30,8 +30,20 @@ def eh_frame_starts(path):
     return {int(m.group(1), 16) for m in re.finditer(r"FDE cie=\w+ pc=([0-9a-f]+)\.\.", out)}
 
 
+def code_sections(path):
+    """Indexes of code sections a function can live in (not .init/.fini/.plt*), as the answer keys use."""
+    out = subprocess.run(["readelf", "-S", "-W", path], capture_output=True, text=True).stdout
+    idx = set()
+    for line in out.splitlines():
+        m = re.match(r"\s*\[\s*(\d+)\]\s+(\S+)\s+\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+(\S*X\S*)\s", line)
+        if m and not m.group(2).startswith((".init", ".fini", ".plt")):
+            idx.add(m.group(1))
+    return idx
+
+
 def symbol_starts(path):
     out = subprocess.run(["readelf", "--syms", "-W", path], capture_output=True, text=True).stdout
+    code = code_sections(path)
     starts, table = set(), ""
     for line in out.splitlines():
         t = re.match(r"Symbol table '([^']+)'", line)
@@ -39,7 +51,7 @@ def symbol_starts(path):
             table = t.group(1)
             continue
         m = re.match(r"^\s*\d+:\s+([0-9a-f]+)\s+(\d+)\s+FUNC\s+\w+\s+\w+\s+(\S+)", line)
-        if m and table == ".symtab" and m.group(3) != "UND" and int(m.group(2)) > 0:
+        if m and table == ".symtab" and m.group(3) != "UND" and (int(m.group(2)) > 0 or m.group(3) in code):
             starts.add(int(m.group(1), 16))
     return starts
 
