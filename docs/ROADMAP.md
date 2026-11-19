@@ -46,7 +46,7 @@ A frontend reads one kind of artifact and writes IR.
 | JavaScript / TypeScript | `.js`, `.ts` | tree-sitter grammars |
 | C / C++ | source | tree-sitter grammars; libclang later if types are needed |
 | SQL | schemas and queries | tree-sitter SQL grammar |
-| Binary (ELF, x86-64) | compiled programs | own ELF reader or LIEF, plus capstone; Ghidra headless later if needed |
+| Binary (ELF, x86-64) | compiled programs | own ELF reader plus capstone ([plan](plans/binary.md)) |
 | Workflow configs | n8n / Node-RED JSON exports | hand-written: they are already graphs |
 | **External protocol** | anything | any program that writes IR JSON to stdout |
 
@@ -82,13 +82,13 @@ Each line is a branch. Size is a rough guess for part-time solo work.
 | `feat/frontend-js` | JS/TS via tree-sitter: ES modules and CommonJS, classes, `this`/`super`, TS annotations, `fetch`/`axios`, SQL | done: 100% precision / 97% recall on samples, 79% recall on npm from runtime profiles ([notes](notes/2026-11-18-js-frontend-eval.md)) |
 | `feat/trace-verify` | Run a fixture, record which functions actually call which (a Python tracer for Python, `-finstrument-functions` for C), compare with the static graph, report precision and recall. Ignore class-body frames: they look like calls but aren't | 1 week |
 | `feat/viewer` | A local web page: pan, zoom, filter by module or edge type, click through to source | 1 week |
-| `exp/frontend-binary` | ELF symbols and disassembly to a call graph for small C programs compiled with gcc; compare with the graph from the same C source | 1–2 weeks, a spike |
+| `feat/frontend-c` … `feat/bin-rules` | Binaries: 7 stages from the C source frontend and an ELF reader to CGL-style structure memory and verified identification. See [plans/binary.md](plans/binary.md) and [decision 0005](decisions/0005-binaries.md) | 9–13 weeks; stages 1–4 (C source, corpus, ELF reader, lifting) first, ~5 weeks |
 
 **Gate v0.1:** run `optum graph` on a real mixed-language repo (Python plus JS, about 10k lines)
 and get a navigable graph. Speed check: a 1M-line Python codebase graphed in under a minute on
 this machine (32 cores). On the fixtures: call-edge precision ≥ 95% and recall ≥ 90%
-against the hand-checked graphs, with the trace check agreeing. The binary spike has a written
-result, even if the result is "not yet".
+against the hand-checked graphs, with the trace check agreeing. Binary stages 1–4 are done (binaries in the graph with their imports and
+APIs); stages 5–7 can continue into Phase 2.
 
 ### Phase 2: Optimize (weeks 8–12)
 
@@ -152,7 +152,7 @@ Picked up when they become the bottleneck, not before. Each is a small branch of
 
 | Risk | What to do |
 |---|---|
-| Binary decompilation swallows months | Keep it as a time-boxed `exp/` spike; source frontends carry the gates |
+| Binary identification swallows months | Stages 1–4 deliver value on their own; the research stage (`exp/bin-skeletons`) is time-boxed ([plan](plans/binary.md)) |
 | The IR keeps changing and breaks every frontend | Version it; fixtures with expected graphs catch breakage at once |
 | C++ slows early progress |  Keep branches small; lean on tree-sitter and libraries instead of writing parsers |
 | "Perfect graph" never feels done | The gate is the precision/recall number, not a feeling |
