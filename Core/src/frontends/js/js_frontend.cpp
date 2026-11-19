@@ -619,7 +619,8 @@ class Summarizer {
     } else if (t == "string" || t == "template_string") {
       e.kind = Expr::Kind::Str;
       ts::for_named(n, [&](TSNode c) {
-        if (ts::is(c, "string_fragment") || ts::is(c, "escape_sequence")) e.parts.emplace_back(false, text(c));
+        if (ts::is(c, "string_fragment")) e.parts.emplace_back(false, text(c));
+        else if (ts::is(c, "escape_sequence")) e.parts.emplace_back(false, frontends::unescape(text(c)));
         else if (ts::is(c, "template_substitution")) {
           const TSNode inner = ts_node_named_child(c, 0);
           e.parts.emplace_back(true, ts::is(inner, "identifier") ? text(inner) : "");

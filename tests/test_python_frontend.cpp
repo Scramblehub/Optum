@@ -72,3 +72,15 @@ TEST_CASE("python: `from . import x` in a top-level file") {
   REQUIRE(e.count("imports py:main -> py:helpers") == 1);
   REQUIRE(e.count("calls py:main.go -> py:helpers.work") == 1);
 }
+
+TEST_CASE("python: escaped quotes in SQL strings are decoded; raw strings are not") {
+  Project p;
+  p.write("q.py",
+          "def a(db):\n"
+          "    db.execute(\"select * from \\\"Users\\\"\")\n"
+          "def b(db):\n"
+          "    db.execute(r'select * from \"raw\\tbl\"')\n");
+  const auto e = p.edges();
+  REQUIRE(e.count("reads py:q.a -> sql:Users") == 1);
+  REQUIRE(e.count("reads py:q.b -> sql:raw\\tbl") == 1);
+}

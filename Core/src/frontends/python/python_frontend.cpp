@@ -378,9 +378,17 @@ class Summarizer {
   }
 
   void add_string_parts(TSNode s, Expr& e) {
+    // Escapes are decoded (\" -> "), except in raw strings (r"...").
+    bool raw = false;
+    ts::for_named(s, [&](TSNode c) {
+      if (ts::is(c, "string_start")) {
+        const std::string_view p = ts::text(c, src_);
+        raw = p.find('r') != std::string_view::npos || p.find('R') != std::string_view::npos;
+      }
+    });
     ts::for_named(s, [&](TSNode c) {
       if (ts::is(c, "string_content")) {
-        e.parts.emplace_back(false, text(c));
+        e.parts.emplace_back(false, raw ? text(c) : frontends::unescape(text(c)));
       } else if (ts::is(c, "interpolation")) {
         const TSNode inner = ts::field(c, "expression");
         e.parts.emplace_back(true, ts::is(inner, "identifier") ? text(inner) : "");

@@ -8,6 +8,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -58,6 +59,29 @@ inline std::string read_file(const std::filesystem::path& p, bool* ok = nullptr)
 }
 
 // ASCII upper-casing, for HTTP method names.
+// Decodes the simple backslash escapes of a string literal (\" \' \\ \n \t \r \`), so SQL and URLs
+// read as they run. Other escapes (\x41, \u00e9...) are kept as written.
+inline std::string unescape(std::string_view s) {
+  std::string out;
+  out.reserve(s.size());
+  for (std::size_t i = 0; i < s.size(); ++i) {
+    if (s[i] != '\\' || i + 1 == s.size()) {
+      out += s[i];
+      continue;
+    }
+    const char n = s[i + 1];
+    switch (n) {
+      case '"': case '\'': case '\\': case '`': out += n; break;
+      case 'n': out += '\n'; break;
+      case 't': out += '\t'; break;
+      case 'r': out += '\r'; break;
+      default: out += s[i]; out += n; break;
+    }
+    ++i;
+  }
+  return out;
+}
+
 inline std::string to_upper(std::string s) {
   for (char& c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
   return s;

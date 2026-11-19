@@ -66,3 +66,13 @@ TEST_CASE("shared id cases (also checked against every adapter)") {
     REQUIRE(optum::sql_store_id(c[0].get<std::string>()) == c[1].get<std::string>());
   }
 }
+
+TEST_CASE("sql: quoted identifiers are one name, spaces and schemas included") {
+  auto t = sql_tables(R"(INSERT INTO "My Table" (x) VALUES (1))");
+  REQUIRE(t.writes == std::vector<std::string>{"My Table"});
+  t = sql_tables(R"(select * from public."Orders" o join "sales"."Items" i on 1)");
+  REQUIRE(t.reads == std::vector<std::string>{"public.Orders", "sales.Items"});
+  REQUIRE(optum::sql_store_id("public.Orders") == "sql:Orders");
+  t = sql_tables("SELECT * FROM `t3` JOIN [order details] ON 1");
+  REQUIRE(t.reads == std::vector<std::string>{"t3", "order details"});
+}

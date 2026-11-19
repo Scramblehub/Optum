@@ -17,7 +17,16 @@ std::vector<std::string> tokenize(std::string_view s) {
   while (i < s.size()) {
     if (ident_char(s[i])) {
       std::size_t j = i;
-      while (j < s.size() && ident_char(s[j])) ++j;
+      while (j < s.size() && ident_char(s[j])) {
+        // A quoted identifier ("My Table", `t`, [t]) runs to its closing quote, spaces included.
+        const char close = s[j] == '"' ? '"' : s[j] == '`' ? '`' : s[j] == '[' ? ']' : '\0';
+        if (close) {
+          const std::size_t end = s.find(close, j + 1);
+          j = end == std::string_view::npos ? s.size() : end + 1;
+        } else {
+          ++j;
+        }
+      }
       out.emplace_back(s.substr(i, j - i));
       i = j;
     } else if (!std::isspace(static_cast<unsigned char>(s[i]))) {
