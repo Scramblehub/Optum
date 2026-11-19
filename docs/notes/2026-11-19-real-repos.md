@@ -57,3 +57,40 @@ weak test of the function itself.
 - **Methods** are by far the most common refusal (33 of 36 in sympy, 21 of 22 in sphinx). Merging
   copied methods needs a shared base class or mixin, a bigger change than an import.
 - **Generated code** should be left out of duplicated logic.
+
+## Update: merging methods too
+
+The fix now merges copied methods ([fixes.md](../fixes.md)): deleted when the class directly
+subclasses the kept method's class, else `name = Kept.name` in the class body. Dry runs:
+
+| Project | Merged | Refused, by reason |
+|---|---|---|
+| sympy | 8 → 6 applied | 14 not the same tree, 8 import cycles, 3 `super()`, 3 decorated |
+| sphinx | 3 | 13 import cycles, 2 `super()`, 2 globals that differ, 2 function vs method |
+| networkx | 2 | 2 nested |
+| boltons, pyparsing, pygments | 0 | `super()` / `__class__`, globals that differ, `global` |
+
+**Applied, with the projects' tests as the gate** (in copies, in a scratch virtualenv):
+
+- **sympy:** the first run failed its tests after the change, and every file was restored: two
+  merges together made an import cycle (one made `theanocode` import `aesaracode`, two others the
+  reverse). The cycle check now counts the imports earlier merges add; the second run applied 6
+  merges (6 files, 121 lines removed) with 1,906 tests passing before and after across `printing`,
+  `tensor`, `functions/special`, `physics/quantum` and `holonomic`.
+- **networkx:** 2 merges (`FilterAdjacency.__len__` and `__iter__` now `FilterAtlas`'s), 1,413
+  tests in `networkx/classes` passing before and after.
+- **sphinx:** its main branch needs Python 3.13 (this machine has 3.12): dry run only.
+
+Read as a maintainer would, some merges are natural (sibling methods in one file, a deprecated
+module pointing at its replacement) and some correct but coupling: `boson.py` now imports
+`fermion.py` for a constructor, the Octave printer imports the Julia printer. Siblings in different
+modules would be better served by a shared base class; that's the next step for the fix.
+
+## Stress test: whole runs under AddressSanitizer
+
+`optum graph` and `diagnose` with the sanitizer build, on express and lodash (JS), redis and curl
+(C), django (Python, 2,943 files): no memory error, no crash; at most 66 s (django, sanitizer build).
+Precision problem found: most duplicate groups weren't the project's own code. lodash: 170 of 177
+are `dist/lodash.js` (a build output) against `lodash.js`; redis: mostly `deps/` (vendored croaring,
+jemalloc, hiredis); curl: `docs/examples` (standalone by design). Next: leave vendored, build,
+generated and example code out of findings.

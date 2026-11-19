@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
-"""Merge exact duplicate Python functions: keep one, make every copy an import of it.
+"""Merge exact duplicate Python functions and methods: keep one, make every copy refer to it.
 
     merge_duplicates.py DIR --optum OPTUM [--test "python3 -m pytest -q"] [--apply] [--report out.json]
 
 Reads `optum diagnose DIR -f json` for duplicated-logic findings (docs/diagnose.md) and takes the
-exact copies among top-level Python functions. Each copy's `def` is replaced by an import of the
-kept function under the copy's name (`from shop.pricing import invoice_total as old_total`; in the
-same file, `old_total = invoice_total`), so callers don't change: the old name now is the kept
-function.
+exact copies among top-level Python functions and methods of top-level classes. Callers don't
+change: the old name now is the kept one.
+  function -> an import of the kept function under the copy's name
+              (`from shop.pricing import invoice_total as old_total`; same file: `old_total = invoice_total`)
+  method   -> deleted when its class directly subclasses the kept method's class (single base);
+              else `name = Kept.name` in the class body (with `from mod import Kept` if needed)
 
 A copy is merged only when it is safe (docs/fixes.md):
-  1. the same code: equal syntax trees (names of the functions and docstrings aside), top level,
-     no decorators, no `global` / `nonlocal`;
+  1. the same code: equal syntax trees (names and docstrings aside), no decorators, no `global` /
+     `nonlocal`; for methods also no `super()`, `__class__` or private `__names` (they refer to the
+     class the code is written in), and the kept class defined before the copy's in the same file;
   2. every global name the body uses means the same in both modules: a builtin in both, the same
      import, or the same constant; anything else (a different TAX_RATE, a local helper) refuses;
   3. no import cycle: the kept function's module doesn't import the copy's module;
@@ -75,22 +78,6 @@ def module_file(root, mod):
     return None, None
 
 
-def split_id(node_id):
-    """py:pkg.mod.func -> (pkg.mod, func). Only top-level functions: one dot past the module."""
-    dotted = node_id[3:]
-    if "@" in dotted:
-        dotted = dotted.split("@")[0]
-    mod, _, name = dotted.rpartition(".")
-    return mod, name
-
-
-def top_function(tree, name):
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
-            return node
-    return None
-
-
 def body_dump(fn):
     """The function's syntax tree without its name and docstring, for comparing copies."""
     body = fn.body
@@ -112,9 +99,16 @@ def globals_used(source, fn):
         for c in t.get_children():
             visit(c)
 
-    for child in table.get_children():
-        if child.get_name() == fn.name and child.get_type() == "function" and child.get_lineno() == fn.lineno:
-            visit(child)
+    def find(t):  # the function's table, at top level or in a class
+        for child in t.get_children():
+            if child.get_name() == fn.name and child.get_type() == "function" and child.get_lineno() == fn.lineno:
+                visit(child)
+                return True
+            if child.get_type() == "class" and find(child):
+                return True
+        return False
+
+    find(table)
     return out
 
 
@@ -166,8 +160,9 @@ def imports_of(tree, mod):
     return out
 
 
-def reaches(start, target, load):
-    """Does module `start` import `target`, directly or not (within the project)?"""
+def reaches(start, target, load, added=None):
+    """Does module `start` import `target`, directly or not (within the project)? `added`: imports
+    that earlier merges of this run add (module -> modules), so merges together can't make a cycle."""
     seen, todo = set(), [start]
     while todo:
         m = todo.pop()
@@ -175,9 +170,9 @@ def reaches(start, target, load):
             continue
         seen.add(m)
         tree = load(m)
-        if tree is None:
-            continue
-        for imp in imports_of(tree, m):
+        imps = set(imports_of(tree, m)) if tree is not None else set()
+        imps |= (added or {}).get(m, set())
+        for imp in imps:
             if imp == target:
                 return True
             todo.append(imp)
@@ -187,6 +182,52 @@ def reaches(start, target, load):
 def run_tests(cmd, cwd):
     r = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True)
     return r.returncode == 0, (r.stdout + r.stderr)[-2000:]
+
+
+class Located:
+    """A function or method, found from its node id in the source."""
+
+    def __init__(self, node_id, mod, cls, fn, path):
+        self.id, self.mod, self.cls, self.fn, self.path = node_id, mod, cls, fn, path
+        self.name = fn.name
+
+
+def locate(node_id, root, load):
+    """py:pkg.mod.func or py:pkg.mod.Class.method -> Located, or None (nested, missing...)."""
+    dotted = node_id[3:].split("@")[0]
+    parts = dotted.split(".")
+    for take in (1, 2):  # a function in a module, or a method in a class
+        if len(parts) <= take:
+            continue
+        mod, qual = ".".join(parts[:-take]), parts[-take:]
+        tree = load(mod)
+        if tree is None:
+            continue
+        if take == 1:
+            for node in tree.body:
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == qual[0]:
+                    return Located(node_id, mod, None, node, module_file(root, mod)[0])
+        else:
+            for node in tree.body:
+                if isinstance(node, ast.ClassDef) and node.name == qual[0]:
+                    for m in node.body:
+                        if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef)) and m.name == qual[1]:
+                            return Located(node_id, mod, node, m, module_file(root, mod)[0])
+    return None
+
+
+def class_bound(fn):
+    """Names in a method that mean its own class: super(), __class__, private __names (mangled)."""
+    for n in ast.walk(fn):
+        names = []
+        if isinstance(n, ast.Name):
+            names.append(n.id)
+        elif isinstance(n, ast.Attribute):
+            names.append(n.attr)
+        for x in names:
+            if x in ("super", "__class__") or (x.startswith("__") and not x.endswith("__")):
+                return x
+    return None
 
 
 def main():
@@ -224,48 +265,61 @@ def main():
         return trees[mod]
 
     merges, refused = [], []
+    added = {}  # imports this run's merges add: copy's module -> kept module
     for f in findings:
         if f["kind"] != "duplicated_logic" or f["evidence"].get("clone_type") != "exact":
             continue
-        members = [m["id"] for m in f["evidence"]["members"] if m["id"].startswith("py:")]
+        ids = [m["id"] for m in f["evidence"]["members"] if m["id"].startswith("py:")]
+        found = [(i, locate(i, root, load)) for i in ids]
+        for i, loc in found:
+            if loc is None:
+                refused.append({"copy": i, "keep": None, "why": "not a function or a method of a top-level class"})
+        members = [loc for _, loc in found if loc is not None]
         if len(members) < 2:
             continue
-        # Keep the copy in the shortest module path (the most central), then the first.
-        members.sort(key=lambda i: (split_id(i)[0].count("."), i))
+        # Keep: a function over a method, then the shortest module path (the most central), then the
+        # one defined first in its file, then the first by id.
+        members.sort(key=lambda d: (d.cls is not None, d.mod.count("."), d.fn.lineno, d.id))
         keep = members[0]
-        kmod, kname = split_id(keep)
-        ktree = load(kmod)
-        kfn = top_function(ktree, kname) if ktree else None
-        if kfn is None or kfn.decorator_list:
-            refused += [{"copy": m, "keep": keep, "why": "the kept function isn't a plain top-level function"} for m in members[1:]]
+        if keep.fn.decorator_list:
+            refused += [{"copy": c.id, "keep": keep.id, "why": "the kept one has decorators"} for c in members[1:]]
             continue
-        kglobals = globals_used(sources[kmod], kfn)
-        for copy in members[1:]:
-            cmod, cname = split_id(copy)
-            ctree = load(cmod)
-            cfn = top_function(ctree, cname) if ctree else None
-
+        kglobals = globals_used(sources[keep.mod], keep.fn)
+        for c in members[1:]:
             def refuse(why):
-                refused.append({"copy": copy, "keep": keep, "why": why})
+                refused.append({"copy": c.id, "keep": keep.id, "why": why})
 
-            if cfn is None or cfn.decorator_list:
-                refuse("not a plain top-level function")
+            if c.fn.decorator_list:
+                refuse("has decorators")
                 continue
-            kind = regulated(copy) or regulated(keep)
+            if (c.cls is None) != (keep.cls is None):
+                refuse("a function and a method: not merged")
+                continue
+            kind = regulated(c.id) or regulated(keep.id)
             if kind and not args.allow_regulated:
                 refuse(f"regulated ({kind}) code stays as it is (--allow-regulated to merge)")
                 continue
-            if body_dump(cfn) != body_dump(kfn):
+            if body_dump(c.fn) != body_dump(keep.fn):
                 refuse("not the same syntax tree")
                 continue
-            if any(isinstance(n, (ast.Global, ast.Nonlocal)) for n in ast.walk(cfn)):
+            if any(isinstance(n, (ast.Global, ast.Nonlocal)) for n in ast.walk(c.fn)):
                 refuse("uses global or nonlocal")
                 continue
-            cglobals = globals_used(sources[cmod], cfn)
+            if c.cls is not None:
+                bound = class_bound(c.fn)
+                if bound:
+                    refuse(f"uses {bound}, which means the class it's written in")
+                    continue
+                if c.name in ("__init_subclass__", "__class_getitem__"):
+                    # Implicitly class methods: Kept.__init_subclass__ would come back bound to Kept.
+                    refuse(f"{c.name} is implicitly a class method")
+                    continue
+            cglobals = globals_used(sources[c.mod], c.fn)
             if cglobals != kglobals:
                 refuse("reads different globals")
                 continue
-            if cmod != kmod:
+            ctree, ktree = load(c.mod), load(keep.mod)
+            if c.mod != keep.mod:
                 differ = []
                 for name in sorted(cglobals):
                     bk, bc = binding(ktree, name), binding(ctree, name)
@@ -276,26 +330,92 @@ def main():
                 if differ:
                     refuse("globals mean different things in the two modules: " + ", ".join(differ))
                     continue
-                if reaches(kmod, cmod, load):
-                    refuse(f"import cycle: {kmod} imports {cmod}")
+                if reaches(keep.mod, c.mod, load, added):
+                    refuse(f"import cycle: {keep.mod} imports {c.mod}" +
+                           (" (with an import another merge adds)" if not reaches(keep.mod, c.mod, load) else ""))
                     continue
-            elif kfn.lineno > cfn.lineno:
-                refuse("in the same file, the copy comes first")
-                continue
-            merges.append({"copy": copy, "keep": keep, "file": module_file(root, cmod)[0],
-                           "start": (cfn.decorator_list[0].lineno if cfn.decorator_list else cfn.lineno),
-                           "end": cfn.end_lineno,
-                           "line": (f"{cname} = {kname}" if cmod == kmod else
-                                    f"from {kmod} import {kname}" + (f" as {cname}" if cname != kname else ""))})
 
-    # Rewrite: per file, bottom up so line numbers stay valid.
+            start = c.fn.lineno
+            end = c.fn.end_lineno
+            indent = " " * c.fn.col_offset
+            note = "  # merged by optum: an exact copy of " + keep.id[3:]
+            imports = []
+            if c.cls is None:  # a function
+                if c.mod == keep.mod:
+                    if keep.fn.lineno > c.fn.lineno:
+                        refuse("in the same file, the copy comes first")
+                        continue
+                    line = f"{c.name} = {keep.name}"
+                else:
+                    line = f"from {keep.mod} import {keep.name}" + (f" as {c.name}" if c.name != keep.name else "")
+            else:  # a method
+                same_class = c.mod == keep.mod and c.cls is keep.cls
+                if same_class:
+                    if keep.fn.lineno > c.fn.lineno:
+                        refuse("in the same class, the copy comes first")
+                        continue
+                    line = f"{c.name} = {keep.name}"
+                else:
+                    if c.mod == keep.mod and keep.cls.lineno > c.cls.lineno:
+                        refuse("in the same file, the copy's class comes first")
+                        continue
+                    if c.mod != keep.mod:
+                        b = binding(ctree, keep.cls.name)
+                        if b is not None and b != ("from", 0, keep.mod, keep.cls.name):
+                            refuse(f"{keep.cls.name} means something else in {c.mod}")
+                            continue
+                        if b is None:
+                            imports.append(f"from {keep.mod} import {keep.cls.name}")
+                    direct = (len(c.cls.bases) == 1 and isinstance(c.cls.bases[0], ast.Name)
+                              and c.cls.bases[0].id == keep.cls.name and c.name == keep.name and not c.cls.keywords)
+                    if direct:
+                        line = None  # inherited: the copy just goes
+                        imports = []
+                    else:
+                        line = f"{c.name} = {keep.cls.name}.{keep.name}"
+            if c.mod != keep.mod:  # the copy's module now depends on the kept one's
+                added.setdefault(c.mod, set()).add(keep.mod)
+            merges.append({"copy": c.id, "keep": keep.id, "file": c.path, "start": start, "end": end,
+                           "line": None if line is None else indent + line + note,
+                           "imports": imports, "class_end": c.cls.end_lineno if c.cls else None,
+                           "class_body": len(c.cls.body) if c.cls else None, "class_indent": indent,
+                           "deleted_note": indent + "# merged-out: " + c.name + " is inherited from " + keep.id[3:] + " (merged by optum)"})
+
+    # Rewrite: per file, bottom up so line numbers stay valid; imports go after the file's last
+    # top-level import.
     new_text = {}
     for path in sorted({m["file"] for m in merges}):
         lines = open(path, encoding="utf-8").read().split("\n")
         for m in sorted((m for m in merges if m["file"] == path), key=lambda m: -m["start"]):
-            indent = ""
-            lines[m["start"] - 1: m["end"]] = [indent + m["line"] + "  # merged by optum: an exact copy of " + m["keep"][3:]]
+            replacement = [m["line"]] if m["line"] is not None else [m["deleted_note"]]
+            lines[m["start"] - 1: m["end"]] = replacement
+        needed = []
+        for m in merges:
+            if m["file"] == path:
+                needed += [i for i in m["imports"] if i not in needed]
+        if needed:
+            tree = ast.parse(open(path, encoding="utf-8").read())
+            after = 0
+            for node in tree.body:
+                if isinstance(node, (ast.Import, ast.ImportFrom)):
+                    after = node.end_lineno
+                elif after == 0 and isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
+                    after = node.end_lineno  # the module docstring
+                elif not isinstance(node, (ast.Import, ast.ImportFrom)):
+                    break
+            lines[after:after] = [i + "  # added by optum (merged copies)" for i in needed]
         new_text[path] = "\n".join(lines)
+    for path, text in list(new_text.items()):  # the result must still parse
+        try:
+            ast.parse(text)
+        except SyntaxError:
+            # A class left with no statement once its copies went: a `pass` keeps it valid.
+            text = text.replace("# merged-out:", "pass  #")
+            try:
+                ast.parse(text)
+            except SyntaxError as e:
+                sys.exit(f"internal error: the rewrite of {path} doesn't parse ({e}); nothing changed")
+        new_text[path] = text.replace("# merged-out:", "#")
 
     report = {"merged": merges, "refused": refused, "applied": False, "tests": None}
     for path, text in new_text.items():
