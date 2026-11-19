@@ -53,3 +53,23 @@
 - `axios.create({ baseURL })` clients: their calls aren't linked to the base URL.
 - `tsconfig.json` path aliases (`@/lib/x`): imports using them become third-party packages.
 - No runtime recall check for TypeScript yet (it needs a compiled run).
+
+## Update (2026-11-19): dispatch, callbacks, implicit constructors
+
+Same 11 npm commands, profiled again (104 observed calls):
+
+| Step | Recall |
+|---|---|
+| main (v0.1) | 78.8% (82 of 104) |
+| Tracer: a class without a constructor runs an implicit one, a frame at the class line. It now counts as the class (`new Sub()`), and its implicit `super(...)` is left out. Before, it showed up as the *module* calling the base class: 9 false misses become what they are, misses of npm's dispatch | 78.8% |
+| Return values (`static cmd(c) { return require(...) }`) and computed requires (`require(\`./commands/${command}.js\`)` → every matching file) | 96.2% |
+| Callbacks given to `sort`, `map`, `filter`... | **98.1%** (102 of 104) |
+
+- **Precision:** the new edges are all `inferred`. The 145 `computed_require` edges come from two
+  lines in `Npm.#exec`: `new Command(this)` reaches the 67 command classes, and `command.exec(args)`
+  reaches 78 `exec` methods. That is exactly what npm can run there. In a hand check of the 10
+  `callback` edges, none was wrong (one is real recursion: `data.map(cleanup)` inside `cleanup`).
+  The sample programs still score 100%, and a new sample, `dispatch`, covers the three rules.
+- **Still missed (2):** `validate-engines.js` calling `entry.js` through a `require()` result passed
+  around as a value, and one call from a nested object-literal method that the profile attributes
+  to `LS.exec`.
