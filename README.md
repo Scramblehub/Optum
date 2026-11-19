@@ -4,7 +4,7 @@ Optum breaks software down into one graph of what it does, simplifies it, and re
 tool sprawl as one system the company owns. See [Optum-concept.md](Optum-concept.md) for the full
 concept and [docs/ROADMAP.md](docs/ROADMAP.md) for the build plan.
 
-Status: **pre-alpha, Phase 1.** Built-in frontends for **Python**, **JavaScript/TypeScript** and **C**:
+Status: **pre-alpha, Phase 1.** Built-in frontends for **Python**, **JavaScript/TypeScript**, **C** and **x86-64 ELF binaries**:
 `optum graph <dir>` breaks a codebase down into one graph (the Python 3.12 standard library,
 285k lines, takes about 0.15 s).
 Other languages and tools plug in as adapters in any language ([docs/protocol.md](docs/protocol.md));
@@ -31,7 +31,7 @@ Commands:
 
 | Command | Does |
 |---|---|
-| `optum graph <path> [-o out] [-f json\|dot\|svg\|mermaid]` | Break code down into a graph: Python, JS/TS, C, plus any adapters |
+| `optum graph <path> [-o out] [-f json\|dot\|svg\|mermaid]` | Break code down into a graph: Python, JS/TS, C, ELF binaries, plus any adapters |
 | `optum export <graph.json> [-o out.svg]` | Draw a saved graph, or cut a smaller one from it |
 | `optum frontends [path] [--adapter cmd]` | List frontends and which files each would read |
 | `optum syntax-tree <file>` | Developer aid: the tree-sitter syntax tree of a `.py`/`.js`/`.ts`/`.c` file |

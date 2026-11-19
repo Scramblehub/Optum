@@ -6,6 +6,7 @@ add_executable(optum_tests
   test_sql_http.cpp
   test_view_export.cpp
   test_process.cpp
+  test_elf.cpp
 )
 target_link_libraries(optum_tests PRIVATE optum_core Catch2::Catch2WithMain)
 target_compile_definitions(optum_tests PRIVATE OPTUM_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
@@ -223,12 +224,29 @@ if(Python3_FOUND AND GCC)
   add_test(NAME corpus_symbols_baseline
            COMMAND ${Python3_EXECUTABLE} ${TOOLS}/score_functions.py --corpus ${CORPUS_DIR} --baseline symbols
                    --min-precision 1 --min-recall 1)
-  # gcc's unwind tables give every function start, even stripped: a binary frontend must match it.
+  # gcc's unwind tables give nearly every function start, even stripped (all but the C runtime's
+  # size-0 functions): the bar a binary frontend must clear.
   add_test(NAME corpus_eh_frame_baseline
            COMMAND ${Python3_EXECUTABLE} ${TOOLS}/score_functions.py --corpus ${CORPUS_DIR} --baseline eh_frame
-                   --form stripped --min-recall 1)
-  set_tests_properties(corpus_answer_keys corpus_symbols_baseline corpus_eh_frame_baseline PROPERTIES
+                   --form stripped --min-recall 0.95)
+  # The binary frontend against the answer keys (docs/plans/binary.md, stage 3 gates).
+  set(SCORE_BIN ${Python3_EXECUTABLE} ${TOOLS}/score_binary.py --optum $<TARGET_FILE:optum> --corpus ${CORPUS_DIR})
+  add_test(NAME binary_symbols_and_stripped
+           COMMAND ${SCORE_BIN} --forms symbols,stripped --min-func-precision 1 --min-func-recall 1
+                   --min-call-precision 0.99 --min-call-recall 0.99)
+  add_test(NAME binary_bare
+           COMMAND ${SCORE_BIN} --forms bare --min-func-precision 0.95 --min-func-recall 0.90
+                   --min-call-precision 0.95 --min-call-recall 0.85)
+  # Binaries in a repo are untrusted input: mutated ones must never crash the frontend.
+  add_test(NAME binary_fuzz
+           COMMAND ${Python3_EXECUTABLE} ${TOOLS}/fuzz_elf.py --optum $<TARGET_FILE:optum> --cases 150
+                   --seed-binary ${CORPUS_DIR}/samples/O2/symbols/multi
+                   --seed-binary ${CORPUS_DIR}/cJSON/O2/symbols/libcjson.so
+                   --seed-binary ${CORPUS_DIR}/zlib/O0/bare/minigzip)
+  set_tests_properties(corpus_answer_keys corpus_symbols_baseline corpus_eh_frame_baseline
+                       binary_symbols_and_stripped binary_bare binary_fuzz PROPERTIES
                        FIXTURES_REQUIRED corpus)
+  set_tests_properties(binary_fuzz PROPERTIES TIMEOUT 900)
 endif()
 
 if(NOT Python3_FOUND OR NO_JSONSCHEMA)

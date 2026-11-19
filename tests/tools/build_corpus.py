@@ -103,11 +103,26 @@ def symtab(binary_path, dynamic=False, table=None):
     return rows
 
 
+def text_sections(path):
+    """Section index -> name, for the code sections a function can live in (not .init/.fini/.plt*)."""
+    out = {}
+    for line in run(["readelf", "-S", "-W", path]).splitlines():
+        m = re.match(r"\s*\[\s*(\d+)\]\s+(\S+)\s+\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+(\S*X\S*)\s", line)
+        if m and not m.group(2).startswith((".init", ".fini", ".plt")):
+            out[m.group(1)] = m.group(2)
+    return out
+
+
 def functions_of(debug_path, project_root):
     # readelf --syms lists .dynsym and .symtab: a shared library's exports appear in both.
+    # Size-0 function symbols in code sections are real functions too (frame_dummy and other C
+    # runtime code); only .init/.fini/.plt pieces are left out.
+    code = text_sections(debug_path)
     seen, funcs = set(), []
     for sym in symtab(debug_path):
-        if sym["type"] == "FUNC" and sym["ndx"] != "UND" and sym["size"] > 0 and (sym["name"], sym["value"]) not in seen:
+        if sym["type"] != "FUNC" or sym["ndx"] == "UND" or (sym["name"], sym["value"]) in seen:
+            continue
+        if sym["size"] > 0 or sym["ndx"] in code:
             seen.add((sym["name"], sym["value"]))
             funcs.append(sym)
     if not funcs:
@@ -118,7 +133,10 @@ def functions_of(debug_path, project_root):
         file, _, line = loc.rpartition(":")
         file = os.path.normpath(file) if file not in ("", "??") else ""
         line = int(line.split()[0]) if line[:1].isdigit() else 0
-        in_project = bool(file) and not os.path.isabs(file) and not file.startswith("..")
+        # In the project only if the file is really there: the C runtime's crtstuff.c also has a
+        # relative name in its debug info.
+        in_project = bool(file) and not os.path.isabs(file) and not file.startswith("..") and \
+            os.path.isfile(os.path.join(project_root, file))
         # GCC splits and clones functions when optimising: gz_compress.cold, f.part.0, f.isra.0,
         # f.constprop.0. They're separate code in the binary but belong to one source function.
         base, dot, suffix = f["name"].partition(".")

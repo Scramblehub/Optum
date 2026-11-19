@@ -48,6 +48,15 @@ target_include_directories(tree_sitter_c PRIVATE ${TS_C_DIR})
 set_target_properties(tree_sitter_javascript tree_sitter_typescript tree_sitter_c PROPERTIES
   C_STANDARD 11 POSITION_INDEPENDENT_CODE ON)
 
+# capstone: x86 only, static, no tools or tests.
+set(CAPSTONE_ARCHITECTURE_DEFAULT OFF CACHE BOOL "" FORCE)
+set(CAPSTONE_X86_SUPPORT ON CACHE BOOL "" FORCE)
+set(CAPSTONE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(CAPSTONE_BUILD_CSTOOL OFF CACHE BOOL "" FORCE)
+set(CAPSTONE_INSTALL OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+add_subdirectory(External_Libraries/capstone EXCLUDE_FROM_ALL)
+
 add_subdirectory(Core)
 
 if(OPTUM_BUILD_TESTS)

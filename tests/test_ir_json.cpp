@@ -91,3 +91,14 @@ TEST_CASE("an empty or one-character address is an error, not undefined behaviou
         ContainsSubstring("nodes[0].loc.address"));
   }
 }
+
+TEST_CASE("invalid UTF-8 in names is replaced on output, not fatal") {
+  Graph g;
+  Node n;
+  n.id = "bin:x!f";
+  n.kind = NodeKind::Function;
+  n.name = std::string("bad\x9c" "name");
+  g.add_node(n);
+  const std::string out = dump_json(to_json(g));
+  REQUIRE_THAT(out, ContainsSubstring("bad\xef\xbf\xbdname"));  // U+FFFD
+}

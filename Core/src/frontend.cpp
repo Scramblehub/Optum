@@ -4,6 +4,7 @@
 
 #include <algorithm>
 
+#include "optum/frontends/binary.hpp"
 #include "optum/frontends/c.hpp"
 #include "optum/frontends/js.hpp"
 #include "optum/frontends/python.hpp"
@@ -94,6 +95,29 @@ class CFrontend : public Frontend {
   unsigned threads_;
 };
 
+// Binaries are found by their content (the ELF magic), not their name: every file is offered.
+class BinaryFrontend : public Frontend {
+ public:
+  BinaryFrontend() {
+    info_.name = "binary";
+    info_.version = "builtin";
+    info_.file_patterns = {"*"};
+  }
+  const FrontendInfo& info() const override { return info_; }
+  Extraction extract(const fs::path& root, const std::vector<fs::path>& files) override {
+    BinaryStats stats;
+    Extraction x;
+    x.graph = extract_binary_files(root, files, &stats, &x.diagnostics);
+    x.summary = std::to_string(stats.files) + " ELF files, " + std::to_string(stats.functions) + " functions, " +
+                std::to_string(stats.instructions) + " instructions";
+    if (stats.skipped) x.summary += " (" + std::to_string(stats.skipped) + " skipped)";
+    return x;
+  }
+
+ private:
+  FrontendInfo info_;
+};
+
 // ---------------------------------------------------------------- external adapters
 
 std::string tail(const std::string& s, std::size_t max_lines) {
@@ -152,7 +176,7 @@ class ExternalFrontend : public Frontend {
                           {"files", nlohmann::json::array()}};
     for (const auto& f : files) req["files"].push_back(f.generic_string());
     Extraction x;
-    const nlohmann::json out = call({"extract"}, req.dump(), "extract", &x.diagnostics);
+    const nlohmann::json out = call({"extract"}, dump_json(req), "extract", &x.diagnostics);
     try {
       x.graph = graph_from_json(out);
     } catch (const IrError& e) {
@@ -204,6 +228,7 @@ std::unique_ptr<Frontend> make_python_frontend(unsigned threads) {
 
 std::unique_ptr<Frontend> make_js_frontend(unsigned threads) { return std::make_unique<JsFrontend>(threads); }
 std::unique_ptr<Frontend> make_c_frontend(unsigned threads) { return std::make_unique<CFrontend>(threads); }
+std::unique_ptr<Frontend> make_binary_frontend() { return std::make_unique<BinaryFrontend>(); }
 
 std::unique_ptr<Frontend> make_external_frontend(const std::string& command,
                                                  std::chrono::milliseconds timeout) {
