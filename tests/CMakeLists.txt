@@ -212,6 +212,17 @@ set_tests_properties(cli_diagnose_needs_input PROPERTIES PASS_REGULAR_EXPRESSION
 add_test(NAME cli_diagnose_markdown COMMAND optum diagnose ${FIXTURES}/programs/mixed/shared_table -q)
 set_tests_properties(cli_diagnose_markdown PROPERTIES PASS_REGULAR_EXPRESSION "# Optum diagnosis.*2 tools reach sql:customers")
 
+# The first automatic fix (docs/fixes.md): merge exact duplicates, gated by the sample's tests.
+if(Python3_FOUND)
+  foreach(mode apply dry revert)
+    add_test(NAME fix_merge_duplicates_${mode}
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_fix.py ${mode}
+                     --optum $<TARGET_FILE:optum> --sample ${FIXTURES}/fixes/merge_duplicates
+                     --work ${CMAKE_CURRENT_BINARY_DIR}/fix_${mode})
+    set_tests_properties(fix_merge_duplicates_${mode} PROPERTIES TIMEOUT 120)
+  endforeach()
+endif()
+
 # External adapters (docs/protocol.md). Need Python, but not jsonschema.
 if(Python3_FOUND)
   set(N8N "${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/Core/adapters/n8n/optum_n8n.py")
