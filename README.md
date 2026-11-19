@@ -4,7 +4,10 @@ Optum breaks software down into one graph of what it does, simplifies it, and re
 tool sprawl as one system the company owns. See [Optum-concept.md](Optum-concept.md) for the full
 concept and [docs/ROADMAP.md](docs/ROADMAP.md) for the build plan.
 
-Status: **v0.1 (Phase 1 done, [changelog](docs/CHANGELOG.md)); Phase 2 next.** Built-in frontends for **Python**, **JavaScript/TypeScript**, **C** and **x86-64 ELF binaries**:
+Status: **v0.2 (Phases 1 and 2 done, [changelog](docs/CHANGELOG.md)); Phase 3, unifying a
+company's tools, next.** `optum diagnose <dir>` reports waste (tools doing the same job, unused
+code, duplicated logic, the same data in several places), and a first automatic fix merges
+duplicated Python code when it's safe and the tests agree. Built-in frontends for **Python**, **JavaScript/TypeScript**, **C** and **x86-64 ELF binaries**:
 `optum graph <dir>` breaks a codebase down into one graph (the Python 3.12 standard library,
 285k lines, takes about 0.15 s).
 Other languages and tools plug in as adapters in any language ([docs/protocol.md](docs/protocol.md));
@@ -32,8 +35,8 @@ Commands:
 | Command | Does |
 |---|---|
 | `optum graph <path> [-o out] [-f json\|dot\|svg\|mermaid]` | Break code down into a graph: Python, JS/TS, C, ELF binaries, plus any adapters |
-| `optum diagnose <path> [-f markdown\|json] [-o out]` | Report waste: tools doing the same job, with evidence and confidence ([docs/diagnose.md](docs/diagnose.md)) |
-| `python3 Core/fixers/merge_duplicates.py <dir> --optum <optum> [--test cmd] [--apply]` | Merge exact duplicate Python functions, only when safe and the tests agree ([docs/fixes.md](docs/fixes.md)) |
+| `optum diagnose <path> [-f markdown\|json] [-o out]` | Report waste: tools doing the same job, unused code, duplicated logic, the same data in several places; with evidence and confidence ([docs/diagnose.md](docs/diagnose.md)) |
+| `python3 Core/fixers/merge_duplicates.py <dir> --optum <optum> [--test cmd] [--apply]` | Merge exact duplicate Python functions and methods, only when safe and the tests agree ([docs/fixes.md](docs/fixes.md)) |
 | `optum export <graph.json> [-o out.svg]` | Draw a saved graph, or cut a smaller one from it |
 | `optum frontends [path] [--adapter cmd]` | List frontends and which files each would read |
 | `optum syntax-tree <file>` | Developer aid: the tree-sitter syntax tree of a `.py`/`.js`/`.ts`/`.c` file |
