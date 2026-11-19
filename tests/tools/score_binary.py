@@ -22,6 +22,7 @@ import argparse
 import collections
 import json
 import os
+import concurrent.futures
 import subprocess
 import sys
 
@@ -53,14 +54,26 @@ def main():
     reach_rows = []
     sid_total, sid_hit, sid_wrong = 0, 0, []
     print(f"{'form':9} {'opt':4} {'functions':>9} {'precision':>10} {'recall':>8} {'calls':>6} {'precision':>10} {'recall':>8}")
-    for form in args.forms.split(","):
+    forms = args.forms.split(",")
+
+    def job(form, e):
+        t = json.load(open(os.path.join(corpus, e["truth"])))
+        binary = os.path.join(corpus, t["paths"][form])
+        out = os.path.join(graphs, e["project"], e["opt"].lstrip("-"), form, e["binary"] + ".json")
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        r = subprocess.run([args.optum, "graph", binary, "-q", "--indent", "-1", "-o", out], capture_output=True, text=True)
+        return binary, r
+
+    # Each `optum graph` run is independent: run them side by side, then score in order.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as pool:
+        runs = {(form, i): pool.submit(job, form, e) for form in forms for i, e in enumerate(manifest)}
+
+    for form in forms:
         per_opt = collections.defaultdict(collections.Counter)
-        for e in manifest:
+        for i, e in enumerate(manifest):
             t = json.load(open(os.path.join(corpus, e["truth"])))
-            binary = os.path.join(corpus, t["paths"][form])
+            binary, r = runs[(form, i)].result()
             out = os.path.join(graphs, e["project"], e["opt"].lstrip("-"), form, e["binary"] + ".json")
-            os.makedirs(os.path.dirname(out), exist_ok=True)
-            r = subprocess.run([args.optum, "graph", binary, "-q", "--indent", "-1", "-o", out], capture_output=True, text=True)
             if r.returncode != 0:
                 sys.exit(f"optum failed on {binary}:\n{r.stderr}")
             g = json.load(open(out))

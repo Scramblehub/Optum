@@ -66,6 +66,12 @@ class Cursor {
     pos_ += s.size() + 1;
     return s;
   }
+  void cstr_skip() {
+    if (pos_ >= d_.size()) fail();
+    const void* end = std::memchr(d_.data() + pos_, 0, d_.size() - pos_);
+    if (!end) fail();
+    pos_ = static_cast<std::uint64_t>(static_cast<const std::uint8_t*>(end) - d_.data()) + 1;
+  }
   void skip(std::uint64_t n) {
     if (n > d_.size() - std::min<std::uint64_t>(pos_, d_.size())) fail();
     pos_ += n;
@@ -181,6 +187,43 @@ Value read_form(Cursor& c, std::uint64_t form, const Unit& u, std::int64_t impli
   return v;
 }
 
+// Advances past one attribute value without building a Value: most DIEs in a big binary
+// (variables, types, inlined calls) are not subprograms and their attributes are never read.
+// Mirrors read_form's sizes, including its failure on unknown forms.
+void skip_form(Cursor& c, std::uint64_t form, const Unit& u) {
+  const std::uint64_t off = static_cast<std::uint64_t>(u.offset_size);
+  switch (form) {
+    case 0x19: case 0x21: break;                                              // flag_present, implicit_const
+    case 0x0b: case 0x0c: case 0x11: case 0x25: case 0x29: c.skip(1); break;  // data1, flag, ref1, strx1, addrx1
+    case 0x05: case 0x12: case 0x26: case 0x2a: c.skip(2); break;             // data2, ref2, strx2, addrx2
+    case 0x27: case 0x2b: c.skip(3); break;                                   // strx3, addrx3
+    case 0x06: case 0x13: case 0x1c: case 0x28: case 0x2c: c.skip(4); break;  // data4, ref4, ref_sup4, strx4, addrx4
+    case 0x07: case 0x14: case 0x20: case 0x24: c.skip(8); break;             // data8, ref8, ref_sig8, ref_sup8
+    case 0x1e: c.skip(16); break;                                             // data16
+    case 0x01: c.skip(u.addr_size); break;                                    // addr
+    case 0x0e: case 0x17: case 0x1d: case 0x1f: c.skip(off); break;           // strp, sec_offset, strp_sup, line_strp
+    case 0x10: c.skip(u.version <= 2 ? u.addr_size : off); break;             // ref_addr
+    case 0x0d: c.sleb(); break;                                               // sdata
+    case 0x0f: case 0x15: case 0x1a: case 0x1b: case 0x22: case 0x23: c.uleb(); break;  // udata, ref_udata, strx, addrx, loclistx, rnglistx
+    case 0x08: c.cstr_skip(); break;                                          // string
+    case 0x03: c.skip(c.get<std::uint16_t>()); break;                         // block2
+    case 0x04: c.skip(c.get<std::uint32_t>()); break;                         // block4
+    case 0x09: case 0x18: c.skip(c.uleb()); break;                            // block, exprloc
+    case 0x0a: c.skip(c.get<std::uint8_t>()); break;                          // block1
+    case 0x16: skip_form(c, c.uleb(), u); break;                              // indirect
+    default: Cursor::fail();
+  }
+}
+
+// The attributes read_unit looks at; the unit DIE (`first`) has a few more.
+bool wanted_attr(std::uint64_t name, bool first) {
+  switch (name) {
+    case 0x03: case 0x11: case 0x12: case 0x55: case 0x3a: case 0x3b: case 0x31: case 0x47: case 0x3c: return true;
+    case 0x1b: case 0x10: case 0x72: case 0x73: case 0x74: return first;
+    default: return false;
+  }
+}
+
 class Reader {
  public:
   explicit Reader(const Sections& s) : s_(s) {}
@@ -282,6 +325,11 @@ class Reader {
       if (code >= abbrevs.size() || abbrevs[code].tag == 0) Cursor::fail();
       const Abbrev& a = abbrevs[code];
       Unit& u = units_[unit_index];
+      if (!first && a.tag != 0x2e) {  // not a subprogram: nothing in it is kept
+        for (const Attr& at : a.attrs) skip_form(c, at.form, u);
+        if (a.children) ++depth;
+        continue;
+      }
       Die d;
       d.offset = die_off;
       d.unit = unit_index;
@@ -290,6 +338,10 @@ class Reader {
       bool high_is_offset = false;
       Value name_v, ranges_v;
       for (const Attr& at : a.attrs) {
+        if (!wanted_attr(at.name, first)) {  // skip the rest (linkage names, types, frame bases, ...)
+          skip_form(c, at.form, u);
+          continue;
+        }
         const Value v = read_form(c, at.form, u, at.implicit);
         switch (at.name) {
           case 0x03: name_v = v; break;                                              // name
