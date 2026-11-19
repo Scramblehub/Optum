@@ -461,7 +461,12 @@ class Project {
   std::string id(DefRef r) const {
     const ModuleInfo& m = mods[std::size_t(r.mod)];
     const Def& d = def(r);
-    return "py:" + m.name + (d.qual.empty() ? "" : "." + d.qual);
+    if (d.qual.empty()) return "py:" + m.name;
+    std::string id = "py:" + m.name + "." + d.qual;
+    // A package attribute can shadow a submodule of the same name (pip._internal defines
+    // main() and has main.py): the module keeps the id, the definition gets "@def".
+    if (by_name_.count(m.name + "." + d.qual)) id += "@def";
+    return id;
   }
 
   int find_module(const std::string& dotted) const {
@@ -488,9 +493,11 @@ class Project {
   Value resolve_member(int m, const std::string& name, int depth) const {
     if (depth > 12 || m < 0) return {};
     const ModuleInfo& mod = mods[std::size_t(m)];
-    if (auto it = by_name_.find(mod.name + "." + name); it != by_name_.end()) return module_value(it->second);
+    // The package's own definition first: `def cli()` in pkg/__init__.py replaces the attribute
+    // the submodule pkg/cli.py set when it was imported.
     const Def& top = mod.defs[0];
     if (auto it = top.children.find(name); it != top.children.end()) return def_value({m, it->second});
+    if (auto it = by_name_.find(mod.name + "." + name); it != by_name_.end()) return module_value(it->second);
     if (auto it = top.bindings.find(name); it != top.bindings.end()) {
       return resolve_binding(it->second, depth + 1);
     }

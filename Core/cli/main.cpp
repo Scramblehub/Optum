@@ -13,6 +13,7 @@
 #include "optum/ir.hpp"
 #include "optum/score.hpp"
 #include "optum/syntax_tree.hpp"
+#include "optum/verify.hpp"
 #include "optum/version.hpp"
 #include "optum/view.hpp"
 
@@ -259,6 +260,19 @@ int main(int argc, char** argv) {
   score->add_option("--min-precision", min_precision, "Fail (exit 1) below this edge precision, 0-1");
   score->add_option("--min-recall", min_recall, "Fail (exit 1) below this edge recall, 0-1");
 
+  std::string verify_graph, verify_trace;
+  bool verify_json = false;
+  double verify_min_recall = 0.0;
+  auto* verify_cmd = app.add_subcommand("verify", "Check a graph against calls observed at runtime (a trace)");
+  verify_cmd->footer(
+      "Example: python3 Core/tracers/python_trace.py --root app/ -o trace.json -- app/main.py\n"
+      "         optum graph app/ -q -o graph.json && optum verify graph.json trace.json\n"
+      "Traces come from the tracers in Core/tracers/ (docs/verify.md). Exits 1 below --min-recall.");
+  verify_cmd->add_option("graph", verify_graph, "Graph JSON (from optum graph)")->required();
+  verify_cmd->add_option("trace", verify_trace, "Trace JSON (observed calls)")->required();
+  verify_cmd->add_flag("--json", verify_json, "Print the report as JSON");
+  verify_cmd->add_option("--min-recall", verify_min_recall, "Fail (exit 1) below this recall, 0-1");
+
   std::string disasm_path;
   auto* disasm_cmd = app.add_subcommand("disasm", "Research aid: an ELF binary's functions and instructions, as JSON");
   disasm_cmd->add_option("binary", disasm_path, "x86-64 ELF executable or shared library")->required();
@@ -364,6 +378,20 @@ int main(int argc, char** argv) {
       for (const auto& f : merge_files) merged.merge(load(f));
       merged.source = merge_files.size() == 1 ? merge_files[0] : "merged";
       return write_json(optum::to_json(merged), out_path, indent);
+    }
+    if (*verify_cmd) {
+      std::ifstream in(verify_trace);
+      if (!in) throw optum::IrError(verify_trace + ": cannot open");
+      nlohmann::json trace;
+      try {
+        trace = nlohmann::json::parse(in);
+      } catch (const nlohmann::json::parse_error& e) {
+        throw optum::IrError(verify_trace + ": invalid JSON: " + e.what());
+      }
+      const auto report = optum::verify(load(verify_graph), trace);
+      if (verify_json) std::cout << optum::dump_json(optum::to_json(report), indent) << "\n";
+      else std::cout << optum::to_text(report);
+      return report.recall() >= verify_min_recall ? 0 : 1;
     }
     if (*score) {
       const auto report = optum::score(load(expected_path), load(produced_path));

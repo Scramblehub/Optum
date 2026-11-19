@@ -34,6 +34,7 @@ Ids are `py:` followed by the dotted path from the analysed root.
 | Class | `data_type` | `py:shapes.Square` |
 | Method | `function` | `py:shapes.Square.area` |
 | Third-party package (not stdlib) | `module`, `attrs.third_party: true` | `py:requests` |
+| A definition with the same dotted name as a submodule (a package's `main()` next to its `main.py`) | as above, with `@def` appended | `py:pip._internal.main@def` |
 
 | Code | Edge |
 |---|---|

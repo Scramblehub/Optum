@@ -15,7 +15,7 @@ numbers below matter more.
 
 - **Size and speed:** 571 files, 285k lines → 16.7k nodes, 37k edges in about 0.15 s
   (release build, 32 cores, peak 220 MB). The sanitizer build runs clean on the same input.
-- **Recall:** standard-library workloads run under a tracer (`tests/tools/stdlib_recall.py`):
+- **Recall:** standard-library workloads run under a tracer (`tests/tools/stdlib_recall.py`, now `Core/tracers/python_trace.py` with `optum verify`):
   **243 of 260 calls written in the source were in the graph (93.5%).**
   - Started at 67%. Most of that gap was the tracer counting things that aren't calls in the
     source (class bodies, operators, `@property`). Filtering those gave 92.7%; typing
@@ -46,3 +46,9 @@ Out of about 18k call edges, 82% are `exact`.
 - Track return types of project functions for attributes and locals (`x = make_client()`).
 - `feat/trace-verify` should turn the prototype script into a proper tool, fixing the `__init__`
   artifact.
+
+## Update (v0.1)
+
+`optum verify` with the new tracer (`docs/verify.md`) counts every call made by a call instruction,
+indirect ones included. The text filter of the prototype dropped those. On the same workloads that
+gives **537 observed calls and 70.6% recall**: the old 93.5% was over 260 calls, without the hardest ones.

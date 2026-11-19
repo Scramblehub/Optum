@@ -13,7 +13,7 @@
 ### npm (JavaScript, CommonJS): 114 files, 14k lines
 
 - **Speed:** 0.04 s.
-- **Recall,** from V8 CPU profiles of 11 offline npm commands (`tests/tools/js_profile_recall.py`):
+- **Recall,** from V8 CPU profiles of 11 offline npm commands (`tests/tools/js_profile_recall.py`, now `Core/tracers/js_profile_trace.py` with `optum verify`):
   **83 of 105 observed calls (79%).**
   - It started at 48%. Two real bugs, neither covered by the samples, accounted for most of the
     gap:
