@@ -22,6 +22,7 @@
 #include <unordered_set>
 
 #include "../common.hpp"
+#include "optum/dwarf.hpp"
 #include "optum/elf.hpp"
 #include "optum/http.hpp"
 #include "optum/sql.hpp"
@@ -496,12 +497,13 @@ struct Func {
 
 class BinaryAnalysis {
  public:
-  BinaryAnalysis(const elf::File& f, std::string rel) : f_(f), rel_(std::move(rel)) {}
+  BinaryAnalysis(const elf::File& f, std::string rel, fs::path root) : f_(f), rel_(std::move(rel)), root_(std::move(root)) {}
 
-  void run() {
+  void run(std::string* diagnostics) {
     map_plt();
     sweep_code();
     find_functions();
+    read_debug_info(diagnostics);
   }
 
   void emit(Graph& g, BinaryStats& stats, LibraryIndex& libs) const;
@@ -509,7 +511,57 @@ class BinaryAnalysis {
  private:
   const elf::File& f_;
   std::string rel_;
+  fs::path root_;
   std::map<std::uint64_t, std::string> plt_;  // PLT stub start -> imported function
+  struct Source {
+    std::string path;  // as the source frontends name it (relative to the analysed directory if possible)
+    std::string name;
+    std::uint32_t line = 0;
+  };
+  std::unordered_map<std::uint64_t, Source> source_;  // function start -> its source, from debug info
+
+  // Debug info gives functions their source ids (decision 0005): c:<file>#<name>.
+  void read_debug_info(std::string* diagnostics) {
+    std::vector<dwarf::Function> fns;
+    try {
+      fns = dwarf::functions(f_);
+    } catch (const IrError& e) {
+      if (diagnostics) *diagnostics += std::string(e.what()) + " (analysed without it)\n";
+      return;
+    }
+    const fs::path base = fs::absolute(root_).lexically_normal();
+    auto source_path = [&](const std::string& file) {
+      fs::path p(file);
+      if (p.is_absolute()) {
+        const fs::path rel = p.lexically_relative(base);
+        if (!rel.empty() && *rel.begin() != "..") p = rel;
+      }
+      std::string path = p.lexically_normal().generic_string();
+      return path.starts_with("./") ? path.substr(2) : path;
+    };
+    // Names defined in more than one file (two files' static helpers) can't be matched by name.
+    std::unordered_map<std::string, std::unordered_set<std::string>> files_of;
+    for (const auto& d : fns) {
+      if (!d.file.empty()) files_of[d.name].insert(d.file);
+    }
+    std::unordered_map<std::string, std::optional<Source>> declared;  // name -> definition without code
+    for (const auto& d : fns) {
+      if (d.file.empty()) continue;
+      if (!d.has_code) {
+        if (files_of[d.name].size() == 1) declared.try_emplace(d.name, Source{source_path(d.file), d.name, d.line});
+        continue;
+      }
+      if (!funcs_.count(d.start)) continue;
+      const Source src{source_path(d.file), d.name, d.line};
+      auto [it, inserted] = source_.try_emplace(d.start, src);
+      if (!inserted && d.is_main_range) it->second = src;
+    }
+    // A symbol whose code has no debug entry, but whose name has exactly one declaration.
+    for (const auto& [a, fn] : funcs_) {
+      if (source_.count(a) || fn.name.empty()) continue;
+      if (auto it = declared.find(fn.name); it != declared.end() && it->second) source_.emplace(a, *it->second);
+    }
+  }
   std::vector<Insn> code_;                     // all code sections, in address order
   std::vector<std::pair<std::uint64_t, std::uint64_t>> ranges_;  // code section [start, end)
   std::map<std::uint64_t, Func> funcs_;
@@ -758,6 +810,7 @@ void BinaryAnalysis::emit(Graph& g, BinaryStats& stats, LibraryIndex& libs) cons
     if (!fn.name.empty()) ++name_count[fn.name];
   }
   std::unordered_map<std::uint64_t, std::string> ids;
+  std::unordered_set<std::string> added;
   // Exported functions by name: in position-independent code, calls between a library's own
   // exported functions go through its PLT, as if they were imports.
   std::unordered_map<std::string, std::uint64_t> exported;
@@ -766,19 +819,30 @@ void BinaryAnalysis::emit(Graph& g, BinaryStats& stats, LibraryIndex& libs) cons
   }
   for (const auto& [a, fn] : funcs_) {
     std::string id = mod_id + "!";
-    if (fn.name.empty()) id += hex(a);
-    else if (name_count[fn.name] > 1) id += fn.name + "@" + hex(a);
-    else id += fn.name;
+    const auto src = source_.find(a);
+    if (src != source_.end()) {
+      // The source id; the symbol's name when there is one keeps GCC's .cold / .part suffixes.
+      id = "c:" + src->second.path + "#" + (fn.name.empty() ? src->second.name : fn.name);
+    } else if (fn.name.empty()) {
+      id += hex(a);
+    } else if (name_count[fn.name] > 1) {
+      id += fn.name + "@" + hex(a);
+    } else {
+      id += fn.name;
+    }
     ids[a] = id;
     Node n;
     n.id = id;
     n.kind = NodeKind::Function;
-    n.name = fn.name.empty() ? hex(a) : fn.name;
-    n.loc = SourceLoc{rel_, 0, 0, a};
+    n.name = fn.name.empty() ? (src != source_.end() ? src->second.name : hex(a)) : fn.name;
+    n.loc = src != source_.end() ? SourceLoc{src->second.path, src->second.line, 0, a} : SourceLoc{rel_, 0, 0, a};
     n.frontend = "binary";
     n.confidence = fn.gap ? Confidence::Inferred : Confidence::Exact;
-    n.attrs = {{"size", fn.end - a}, {"found", fn.found}};
+    n.attrs = {{"size", fn.end - a}, {"found", fn.found}, {"address", hex(a)}, {"binary", rel_}};
     if (fn.is_static) n.attrs["static"] = true;
+    // Copies of one source function (a static inline in a header, emitted in several files)
+    // share an id and become one node.
+    if (!added.insert(id).second) continue;
     g.add_node(std::move(n));
     Edge e;
     e.from = *g.find(mod_id);
@@ -923,8 +987,8 @@ Graph extract_binary_files(const fs::path& root, const std::vector<fs::path>& fi
         if (diagnostics) *diagnostics += rel.generic_string() + ": not x86-64, skipped\n";
         continue;
       }
-      BinaryAnalysis a(f, rel.generic_string());
-      a.run();
+      BinaryAnalysis a(f, rel.generic_string(), root);
+      a.run(diagnostics);
       a.emit(g, st, libs);
       ++st.files;
     } catch (const IrError& e) {

@@ -24,6 +24,7 @@ Uses gcc, strip, objcopy, readelf and addr2line. Optional projects (sqlite) are 
 DIR/_downloads and checked against a pinned SHA3-256.
 """
 import argparse
+import collections
 import concurrent.futures
 import hashlib
 import json
@@ -120,6 +121,98 @@ def text_sections(path):
     return out
 
 
+def dwarf_decls(debug_path):
+    """Each function's declaring file and line, from the debug info (DW_AT_decl_file), read with
+    binutils' readelf: by code address, and by name for declarations without one. addr2line's
+    answer is the line table's, which for an inline function from a header can be its caller's."""
+    def plain(text):  # readelf -W writes each value's form first: "(addr) 0x1149", "(udata) 1"
+        return re.sub(r"\((?:addr|udata|data\d|sdata|line_strp|strp|string|sec_offset|ref\d|ref_udata|strx\d?|addrx\d?|implicit_const|flag_present|flag)\)\s*", "", text)
+
+    tables, files = {}, None
+    for line in run(["readelf", "--debug-dump=line", "-W", debug_path]).splitlines():
+        line = plain(line)
+        m = re.match(r"\s*Offset:\s+(0x[0-9a-f]+|0)\s*$", line)  # readelf prints the first as plain "0"
+        if m:
+            files, dirs = [], []
+            tables[int(m.group(1), 16)] = (dirs, files)
+            mode = None
+            continue
+        if files is None:
+            continue
+        if "The Directory Table" in line:
+            mode = "dirs"
+        elif "The File Name Table" in line:
+            mode = "files"
+        elif "Line Number Statements" in line:
+            mode = None
+        elif mode:
+            m = re.match(r"\s*(\d+)\s+(?:(\d+)\s+)?\(.*\):\s+(.*)$", line) or re.match(r"\s*(\d+)\s+(?:(\d+)\s+)?(\S.*)$", line)
+            if m and not line.strip().startswith("Entry"):
+                (dirs if mode == "dirs" else files).append((m.group(3).strip(), int(m.group(2) or 0)))
+    by_addr, by_offset, cu_table = {}, {}, None
+    cur = None
+    for line in run(["readelf", "--debug-dump=info", "-W", debug_path]).splitlines():
+        m = re.match(r"\s*<(\d+)><([0-9a-f]+)>: Abbrev Number: \d+ \((\w+)\)", line)
+        if m:
+            cur = {"tag": m.group(3), "off": int(m.group(2), 16), "table": cu_table}
+            if m.group(3) == "DW_TAG_subprogram":
+                by_offset[cur["off"]] = cur
+            continue
+        if cur is None:
+            continue
+        m = re.match(r"\s*<[0-9a-f]+>\s+(DW_AT_\w+)\s*:\s*(.*)$", plain(line))
+        if not m:
+            continue
+        attr, val = m.groups()
+        if attr == "DW_AT_stmt_list" and cur["tag"] == "DW_TAG_compile_unit":
+            cu_table = tables.get(int(val, 16))
+        elif attr == "DW_AT_name":
+            cur["name"] = val.split(": ")[-1].strip()
+        elif attr == "DW_AT_decl_file":
+            cur["file"] = int(val.split()[0], 0)  # decimal, or hex for wide forms
+        elif attr == "DW_AT_decl_line":
+            cur["line"] = int(val.split()[0], 0)
+        elif attr == "DW_AT_low_pc":
+            cur["low"] = int(val, 16)
+        elif attr == "DW_AT_declaration":
+            cur["declaration"] = True
+        elif attr in ("DW_AT_abstract_origin", "DW_AT_specification"):
+            cur["origin"] = int(re.search(r"<0x([0-9a-f]+)>", val).group(1), 16)
+    def resolve(d):
+        name, fileno, line, table, hops = d.get("name"), d.get("file"), d.get("line", 0), d["table"], 0
+        while (name is None or fileno is None) and "origin" in d and hops < 8:
+            d = by_offset.get(d["origin"], {})
+            if not d:
+                break
+            name = name or d.get("name")
+            if fileno is None:
+                fileno, line, table = d.get("file"), d.get("line", 0), d["table"]
+            hops += 1
+        if fileno is None or not table:
+            return None
+        dirs, files = table
+        if fileno >= len(files):
+            return None
+        fname, dirno = files[fileno]
+        path = os.path.normpath(os.path.join(dirs[dirno][0] if dirno < len(dirs) else "", fname))
+        return name, path, line
+    # The name fallback is only safe for names defined in one file anywhere in the debug info
+    # (two files' static helpers of one name, one of them inlined away, must not be confused).
+    by_name, files_of = collections.defaultdict(set), collections.defaultdict(set)
+    for d in by_offset.values():
+        r = resolve(d)
+        if not r:
+            continue
+        if not d.get("declaration"):  # prototypes aren't definitions
+            files_of[r[0]].add(r[1])
+        if "low" in d:
+            by_addr[d["low"]] = r
+        elif "origin" not in d and not d.get("declaration"):
+            by_name[r[0]].add((r[1], r[2]))
+    by_name = {n: v for n, v in by_name.items() if len(files_of[n]) == 1}
+    return by_addr, {n: (n, *next(iter(v))) for n, v in by_name.items() if len(v) == 1}  # (name, path, line)
+
+
 def functions_of(debug_path, project_root):
     # readelf --syms lists .dynsym and .symtab: a shared library's exports appear in both.
     # Size-0 function symbols in code sections are real functions too (frame_dummy and other C
@@ -135,11 +228,16 @@ def functions_of(debug_path, project_root):
     if not funcs:
         return []
     out = run(["addr2line", "-f", "-e", debug_path] + [hex(f["value"]) for f in funcs]).splitlines()
+    by_addr, by_name = dwarf_decls(debug_path)
     result = []
     for f, (_, loc) in zip(funcs, zip(out[0::2], out[1::2])):
         file, _, line = loc.rpartition(":")
         file = os.path.normpath(file) if file not in ("", "??") else ""
         line = int(line.split()[0]) if line[:1].isdigit() else 0
+        # The declaring file from the debug info, where it has one (see dwarf_decls).
+        decl = by_addr.get(f["value"]) or by_name.get(f["name"].partition(".")[0])
+        if decl and file:
+            file, line = decl[1], decl[2]
         # In the project only if the file is really there: the C runtime's crtstuff.c also has a
         # relative name in its debug info.
         in_project = bool(file) and not os.path.isabs(file) and not file.startswith("..") and \
@@ -174,10 +272,17 @@ def calls_of(ci_files, functions):
         else:
             by_name[f["name"]] = f["source_id"]
 
+    static_names = collections.defaultdict(set)
+    for (file, name), sid in statics.items():
+        static_names[name].add(sid)
+
     def resolve(title, tu):
         if ":" in title:
             file, name = title.rsplit(":", 1)
-            return statics.get((file, name)) or statics.get((os.path.basename(file), name))
+            hit = statics.get((file, name)) or statics.get((os.path.basename(file), name))
+            if not hit and len(static_names[name]) == 1:  # declared in a header, compiled into this file
+                hit = next(iter(static_names[name]))
+            return hit
         return by_name.get(title) or statics.get((tu, title)) or statics.get((os.path.basename(tu), title))
 
     calls, external, indirect = set(), set(), 0

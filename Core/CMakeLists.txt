@@ -20,6 +20,7 @@ add_library(optum_core
   src/frontends/c/c_frontend.cpp
   src/frontends/binary/binary_frontend.cpp
   src/elf.cpp
+  src/dwarf.cpp
 )
 target_include_directories(optum_core PUBLIC include)
 find_package(Threads REQUIRED)
