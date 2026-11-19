@@ -20,6 +20,18 @@ change in the same commit.
   progress on the hard cases stays visible.
 - **What is scored (0.1):** node ids and kinds; edges by (`from`, `to`, `kind`). Not scored yet:
   names, locations, confidence, attrs.
+- **For the unused-code analysis** ([diagnose.md](diagnose.md#unused-code)), every Python, JS and C
+  function and class node may carry:
+  - `attrs.local: true`: code outside the project can't reach it by name (Python `_name` or nested;
+    JS not exported, nested or `#private`; C `static` in a `.c` file);
+  - `attrs.referenced: true`: its name appears in the project's non-test code other than at a
+    definition, including strings, names built from a prefix or suffix, C macro bodies and
+    `#include`d non-C files; also decorated Python functions and methods of a class with a base
+    outside the project. `attrs.referenced_from: "binary"` when a project binary carries the name;
+  - `attrs.referenced_by_tests: true`: the same, but only in test code.
+
+  These are counts of names, not resolved references: generous on purpose, so a definition without
+  `referenced` is very likely unused.
 
 ## Python
 

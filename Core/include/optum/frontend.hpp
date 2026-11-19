@@ -56,4 +56,11 @@ Discovery discover(const std::filesystem::path& path);
 
 bool matches_any(const std::vector<std::string>& patterns, const std::filesystem::path& rel);
 
+// For the unused-code analysis: names the project's binaries carry as strings (a C extension
+// looking up a Python helper by name, as numpy and pyuno do) mark the local, unreferenced
+// definitions with that name as referenced (attrs.referenced_from: "binary"). `files` are relative
+// to `root`; only ELF files are read.
+void mark_names_in_binaries(Graph& g, const std::filesystem::path& root,
+                            const std::vector<std::filesystem::path>& files);
+
 }  // namespace optum

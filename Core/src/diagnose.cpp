@@ -1,5 +1,7 @@
 #include "optum/diagnose.hpp"
 
+#include "test_code.hpp"
+
 #include <algorithm>
 #include <tuple>
 #include <map>
@@ -43,26 +45,88 @@ std::string component_of(const Node& unit) {
   return cut == std::string::npos ? unit.id : ns + rest.substr(0, cut);
 }
 
-// Test code (a test/tests/spec segment, test_*.py, *_test.*, *.test.js, *.spec.ts): it reaches
-// what the code under test reaches, which isn't waste.
-bool is_test(const std::string& id) {
-  const auto colon = id.find(':');
-  std::string rest = colon == std::string::npos ? id : id.substr(colon + 1);
-  for (char& c : rest) {
-    if (c == '.' || c == '/' || c == '#') c = ' ';
-  }
-  std::istringstream words(rest);
-  for (std::string w; words >> w;) {
-    if (w == "test" || w == "tests" || w == "testing" || w == "spec" || w == "__tests__" ||
-        w.starts_with("test_") || w.ends_with("_test") || w.ends_with("_tests")) {
-      return true;
-    }
-  }
-  return false;
+// Test code reaches what the code under test reaches, which isn't waste.
+bool is_test(const std::string& id) { return is_test_code(id); }
+
+// Unused code (docs/diagnose.md). Names a framework or dispatch mechanism calls by name, unseen
+// by the graph: they're never reported (the list follows Magellan's).
+bool called_by_name(const std::string& name, bool method) {
+  if (name.starts_with("__") && name.ends_with("__")) return true;  // Python dunders
+  if (name == "constructor" || name == "main") return true;
+  if (name.starts_with("_repr_") && name.ends_with("_")) return true;  // IPython display hooks
+  if (!method) return false;
+  static const char* kHooks[] = {"visit_", "leave_", "depart_", "do_", "handle_", "on_", "test_",
+                                 "setUp", "tearDown", "setUpClass", "tearDownClass", "run"};
+  return std::any_of(std::begin(kHooks), std::end(kHooks), [&](const char* h) { return name.starts_with(h); });
 }
 
 bool outside(const Node& n) {
   return n.kind == NodeKind::External || n.kind == NodeKind::Store;
+}
+
+// Definitions nothing in the project uses: local (unreachable by name from outside the project),
+// never called by other code, and whose name appears nowhere else (attrs.referenced). Then
+// definitions only test code calls. One finding of each kind per component.
+void unused_code(const Graph& g, const std::vector<NodeIndex>& unit, std::vector<Finding>& out) {
+  std::vector<NodeIndex> parent(g.nodes().size());
+  for (NodeIndex i = 0; i < parent.size(); ++i) parent[i] = i;
+  for (const Edge& e : g.edges()) {
+    if (e.kind == EdgeKind::Defines && parent[e.to] == e.to && e.from != e.to) parent[e.to] = e.from;
+  }
+  std::vector<int> callers(g.nodes().size(), 0), product_callers(g.nodes().size(), 0);
+  for (const Edge& e : g.edges()) {
+    if (e.kind != EdgeKind::Calls || e.from == e.to) continue;
+    ++callers[e.to];
+    if (!is_test(g.node(e.from).id)) ++product_callers[e.to];
+  }
+  struct Hit {
+    NodeIndex node;
+    bool test_only;
+  };
+  std::map<std::string, std::vector<Hit>> by_component;
+  std::vector<bool> reported(g.nodes().size(), false);
+  for (NodeIndex i = 0; i < g.nodes().size(); ++i) {
+    const Node& n = g.node(i);
+    if (n.kind != NodeKind::Function && n.kind != NodeKind::DataType) continue;
+    if (n.frontend != "python" && n.frontend != "js" && n.frontend != "c") continue;
+    if (!n.attrs.value("local", false) || n.attrs.value("referenced", false) || n.attrs.contains("accessor")) continue;
+    if (is_test(n.id)) continue;
+    const bool method = g.node(parent[i]).kind == NodeKind::DataType;
+    if (called_by_name(n.name, method)) continue;
+    if (product_callers[i] > 0) continue;
+    // Inside something already reported: the outer definition says it.
+    bool inside = false;
+    for (NodeIndex p = parent[i]; p != parent[p] && !inside; p = parent[p]) inside = reported[p];
+    if (inside) continue;
+    reported[i] = true;
+    by_component[component_of(g.node(unit[i]))].push_back({i, callers[i] > 0 || n.attrs.value("referenced_by_tests", false)});
+  }
+  for (const bool test_only : {false, true}) {
+    for (const auto& [component, hits] : by_component) {
+      Finding f;
+      f.kind = test_only ? "test_only" : "unused";
+      f.units = {component};
+      f.confidence = "likely";
+      nlohmann::json defs = nlohmann::json::array();
+      std::uint32_t lines = 0;
+      for (const Hit& h : hits) {
+        if (h.test_only != test_only) continue;
+        const Node& n = g.node(h.node);
+        f.targets.push_back(n.id);
+        const std::uint32_t len = n.loc && n.loc->end_line >= n.loc->line ? n.loc->end_line - n.loc->line + 1 : 0;
+        lines += len;
+        defs.push_back({{"id", n.id}, {"kind", std::string(to_string(n.kind))},
+                        {"file", n.loc ? n.loc->file : ""}, {"line", n.loc ? n.loc->line : 0}, {"lines", len}});
+      }
+      if (f.targets.empty()) continue;
+      std::sort(f.targets.begin(), f.targets.end());
+      const std::string count = std::to_string(f.targets.size()) + (f.targets.size() == 1 ? " definition" : " definitions");
+      f.title = test_only ? count + " in " + component + " only tests use (" + std::to_string(lines) + " lines)"
+                          : count + " in " + component + " with no static reference found (" + std::to_string(lines) + " lines)";
+      f.evidence = {{"definitions", defs}, {"lines", lines}};
+      out.push_back(std::move(f));
+    }
+  }
 }
 
 }  // namespace
@@ -197,6 +261,8 @@ Diagnosis diagnose(const Graph& g) {
     f.evidence = {{"targets", nlohmann::json::array({{{"target", t.id}, {"uses", uses}}})}};
     d.findings.push_back(std::move(f));
   }
+  unused_code(g, unit, d.findings);
+
   // Surest first (docs/plans/phase2.md), then strongest: more units, then more targets.
   auto rank = [](const std::string& c) { return c == "certain" ? 2 : c == "likely" ? 1 : 0; };
   std::stable_sort(d.findings.begin(), d.findings.end(), [&](const Finding& a, const Finding& b) {
@@ -249,6 +315,22 @@ std::string to_markdown(const Diagnosis& d) {
   int k = 0;
   for (const auto& f : d.findings) {
     o += "### " + std::to_string(++k) + ". " + f.title + "\n\n";
+    if (f.kind == "unused" || f.kind == "test_only") {
+      o += std::string("Kind: ") + (f.kind == "unused" ? "unused code" : "used only by tests") +
+           ". Confidence: **" + f.confidence + "**. " +
+           (f.kind == "unused"
+                ? "Nothing in the project calls these, and their names appear nowhere else. Code that looks "
+                  "names up at runtime (plugins, reflection) isn't visible: confirm before deleting.\n\n"
+                : "Only test code calls these; the product never runs them.\n\n");
+      o += "| Definition | Kind | Where | Lines |\n|---|---|---|---|\n";
+      for (const auto& dj : f.evidence["definitions"]) {
+        o += "| `" + dj["id"].get<std::string>() + "` | " + dj["kind"].get<std::string>() + " | " +
+             dj["file"].get<std::string>() + ":" + std::to_string(dj["line"].get<std::uint32_t>()) + " | " +
+             std::to_string(dj["lines"].get<std::uint32_t>()) + " |\n";
+      }
+      o += "\n";
+      continue;
+    }
     o += "Kind: overlapping glue. Confidence: **" + f.confidence + "**.\n\n";
     o += "| Outside system |";
     for (const auto& u : f.units) o += " `" + u + "` |";

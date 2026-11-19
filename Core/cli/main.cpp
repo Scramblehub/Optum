@@ -200,6 +200,7 @@ optum::Graph build_graph(const std::string& path, const std::vector<std::string>
     }
     g.merge(x.graph);
   }
+  optum::mark_names_in_binaries(g, d.root, d.files);
   if (!quiet && g.nodes().empty()) {
     std::cerr << "optum: nothing to analyse under " << path
               << " (no Python, JS/TS, C or ELF files found); 'optum frontends " << path

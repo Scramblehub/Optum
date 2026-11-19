@@ -20,6 +20,8 @@
 
 #include "../../ts_util.hpp"
 #include "../common.hpp"
+#include "../names.hpp"
+#include "../../test_code.hpp"
 #include "optum/frontend.hpp"
 #include "optum/http.hpp"
 #include "optum/sql.hpp"
@@ -75,6 +77,7 @@ struct Def {
   std::vector<std::string> params;               // functions: parameter names, in order
   std::unordered_map<std::string, Expr> defaults;  // functions: parameter default values
   std::vector<Expr> returns;                       // functions: returned expressions (first few)
+  bool decorated = false;  // a decorator receives it as a value (registration, routes, fixtures)
   std::vector<std::string> star_imports;
 };
 
@@ -109,6 +112,8 @@ struct ModuleInfo {
   std::vector<Def> defs;  // defs[0] is the module
   std::vector<ImportRef> imports;
   std::vector<CallSite> calls;
+  frontends::NameUses names;  // name uses outside definitions
+  bool test_file = false;
 };
 
 // Builtins that call a dunder method of their first argument. Iteration (`for`, list(x), ...)
@@ -298,6 +303,10 @@ class Summarizer {
       });
     }
     walk(definition, ds, as);
+    const TSNode dname = ts::field(definition, "name");
+    if (!ts_node_is_null(dname)) {
+      if (auto it = def(ds).children.find(text(dname)); it != def(ds).children.end()) def(it->second).decorated = true;
+    }
   }
 
   // A call that runs a dunder of `arg`'s class, resolved in pass 2 like `arg.<dunder>()`.
@@ -605,6 +614,11 @@ class Project {
           if (v.kind == Value::Kind::Def && def(v.ref).kind == DefKind::Class && !(v.ref == DefRef{m, d})) {
             bases_[{m, d}].push_back(v.ref);
             subclasses_[v.ref].push_back({m, d});
+          } else {
+            // A base outside the project (stdlib, a package): it may call the methods by name.
+            static const std::unordered_set<std::string_view> inert = {
+                "object", "Generic", "Protocol", "ABC", "Exception", "BaseException", "NamedTuple", "TypedDict"};
+            if (!inert.count(b.text)) outside_base_.insert({m, d});
           }
         }
       }
@@ -842,6 +856,17 @@ class Project {
 
   ParamFlows flows;  // filled between the two linking passes
 
+  // Does the class (or a project base of it) have a base outside the project? Its methods may
+  // be called by that base, by name (argparse calling an overridden _parse_known_args).
+  bool has_outside_base(DefRef cls, int depth = 0) const {
+    if (depth > 16) return false;
+    if (outside_base_.count(cls)) return true;
+    for (const DefRef& b : bases_of(cls)) {
+      if (has_outside_base(b, depth + 1)) return true;
+    }
+    return false;
+  }
+
   // A class's project metaclass: its own `metaclass=`, else its bases'.
   std::optional<DefRef> metaclass_of(DefRef cls, int depth = 0) const {
     if (depth > 16) return std::nullopt;
@@ -906,6 +931,7 @@ class Project {
   std::unordered_map<std::string, int> by_name_;
   std::unordered_map<std::string, int> by_suffix_;
   std::unordered_map<DefRef, std::vector<DefRef>, DefRefHash> bases_, subclasses_;
+  std::unordered_set<DefRef, DefRefHash> outside_base_;
   std::unordered_map<std::string, std::vector<DefRef>> methods_by_name_;
 
   static Value module_value(int i) { return {Value::Kind::Module, {i, 0}, {}}; }
@@ -1351,7 +1377,24 @@ Graph extract_python_files(const fs::path& root, const std::vector<fs::path>& re
     const TSNode rootn = ts_tree_root_node(tree.get());
     m.syntax_error = ts_node_has_error(rootn);
     Summarizer(m, src).run(rootn);
+    {  // test files count separately (attrs.referenced_by_tests)
+      static const std::unordered_set<std::string_view> names = {"identifier"}, strings = {"string_content"};
+      static const frontends::DefFields defs = {{"function_definition", "name"}, {"class_definition", "name"}};
+      m.test_file = is_test_code(m.file);
+      frontends::count_name_uses(rootn, src, names, strings, defs, m.names);
+    }
   });
+  frontends::NameUses uses, test_uses;
+  for (auto& m : project.mods) {
+    for (const auto& [name, n] : m.names) (m.test_file ? test_uses : uses)[name] += n;
+    m.names = {};
+  }
+  {
+    std::vector<std::string> names;
+    for (const auto& m : project.mods) for (std::size_t d = 1; d < m.defs.size(); ++d) names.push_back(m.defs[d].name);
+    frontends::finalize_name_uses(uses, names);
+    frontends::finalize_name_uses(test_uses, std::move(names));
+  }
 
   // Stats count every file read, before two files that map to one module are merged below.
   if (stats) {
@@ -1410,6 +1453,17 @@ Graph extract_python_files(const fs::path& root, const std::vector<fs::path>& re
       n.name = d == 0 ? m.name.substr(m.name.rfind('.') == std::string::npos ? 0 : m.name.rfind('.') + 1) : df.name;
       n.loc = SourceLoc{m.file, df.line, df.end_line, std::nullopt};
       n.frontend = "python";
+      if (d > 0) {
+        // For the unused-code analysis (docs/frontends.md): is the name used anywhere else, and
+        // can code outside the project reach it by name?
+        const bool override_of_outside = m.defs[std::size_t(df.parent)].kind == DefKind::Class &&
+                                         project.has_outside_base({static_cast<int>(mi), df.parent});
+        if (df.decorated || override_of_outside || frontends::name_used(uses, df.name)) n.attrs["referenced"] = true;
+        else if (frontends::name_used(test_uses, df.name)) n.attrs["referenced_by_tests"] = true;
+        const bool dunder = df.name.starts_with("__") && df.name.ends_with("__");
+        const bool nested = m.defs[std::size_t(df.parent)].kind == DefKind::Function;
+        if ((df.name.starts_with("_") && !dunder) || nested) n.attrs["local"] = true;
+      }
       g.add_node(std::move(n));
     }
     // Packages define their submodules.
