@@ -19,14 +19,19 @@ Kept short on purpose. Change it when it stops fitting.
 
 ## Working together
 
-The repo is owned by Scramblehub. These rules are agreed, not enforced: on GitHub's free plan
-a private repo can't lock `main`. If the repo moves to GitHub Pro, they become a ruleset.
+The repo is owned by Scramblehub and is public. Rules 1–4 are **enforced** by two GitHub
+rulesets on `main` (Settings → Rules → Rulesets); the rest are agreed.
+
+| Ruleset | Applies to | Requires |
+|---|---|---|
+| `main: protected` | everyone, the owner included | a pull request; all three CI builds green; no force pushes; no deleting `main` |
+| `main: collaborator review` | everyone except the owner, who can bypass it only when merging a PR | 1 approving review of the latest push; approvals are dismissed when new commits arrive |
 
 1. **Never push to `main`.** Create a branch (named as above), push it, open a pull request.
 2. **Pull requests from Scramblehub** may be merged by Scramblehub without a review.
 3. **Pull requests from anyone else need Scramblehub's approval on their latest commit** before
-   they're merged. The **Owner approval** check on the PR shows whether they have it. It turns
-   red again when new commits are pushed after an approval. Once approved, the author can merge.
+   they're merged. Pushing new commits dismisses an earlier approval. Once approved, the author
+   can merge.
 4. **CI must be green** (debug, asan and release) before anything is merged.
 5. **Other people's branches:** don't push to them without asking. Never force-push `main` or a
    branch someone else is working on. Rewriting your own branch before review is fine.
