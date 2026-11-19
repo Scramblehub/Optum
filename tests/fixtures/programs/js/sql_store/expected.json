@@ -1,0 +1,23 @@
+{
+  "ir_version": "0.1.0",
+  "source": "tests/fixtures/programs/js/sql_store",
+  "nodes": [
+    {"id": "js:store.ts", "kind": "module", "name": "store.ts", "frontend": "js"},
+    {"id": "js:pg", "kind": "module", "name": "pg", "frontend": "js", "attrs": {"third_party": true}},
+    {"id": "js:store.ts#addCustomer", "kind": "function", "name": "addCustomer", "frontend": "js"},
+    {"id": "js:store.ts#addOrder", "kind": "function", "name": "addOrder", "frontend": "js"},
+    {"id": "js:store.ts#revenueByCustomer", "kind": "function", "name": "revenueByCustomer", "frontend": "js"},
+    {"id": "sql:customers", "kind": "store", "name": "customers", "frontend": "js"},
+    {"id": "sql:orders", "kind": "store", "name": "orders", "frontend": "js"}
+  ],
+  "edges": [
+    {"from": "js:store.ts", "to": "js:store.ts#addCustomer", "kind": "defines"},
+    {"from": "js:store.ts", "to": "js:store.ts#addOrder", "kind": "defines"},
+    {"from": "js:store.ts", "to": "js:store.ts#revenueByCustomer", "kind": "defines"},
+    {"from": "js:store.ts", "to": "js:pg", "kind": "imports"},
+    {"from": "js:store.ts#addCustomer", "to": "sql:customers", "kind": "writes"},
+    {"from": "js:store.ts#addOrder", "to": "sql:orders", "kind": "writes"},
+    {"from": "js:store.ts#revenueByCustomer", "to": "sql:orders", "kind": "reads"},
+    {"from": "js:store.ts#revenueByCustomer", "to": "sql:customers", "kind": "reads"}
+  ]
+}

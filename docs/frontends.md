@@ -59,6 +59,36 @@ Ids are `py:` followed by the dotted path from the analysed root.
 - Directories skipped: hidden ones, `__pycache__`, `node_modules`, `venv`, `site-packages`.
 - Files with syntax errors are still analysed (tree-sitter recovers); `optum graph` reports how many.
 
+## JavaScript and TypeScript
+
+Files: `.js .jsx .mjs .cjs .ts .tsx .mts .cts`, except `.d.ts` and `.min.js`. Ids are `js:` + the
+path from the analysed root, then `#` and the dotted name inside the file.
+
+| Thing | Node | Id example |
+|---|---|---|
+| File | `module` | `js:src/orders.js` |
+| Function (declaration, or `const f = () => ...`) | `function` | `js:src/orders.js#placeOrder` |
+| Nested function | `function` | `js:app.js#report.fmt` |
+| Class | `data_type` | `js:shapes.ts#Square` |
+| Method, constructor, class field holding a function | `function` | `js:shapes.ts#Square.area`, `#Square.constructor` |
+| Getter / setter | `function`, `attrs.accessor: "get"` / `"set"` | `js:lib/npm.js#Npm.flatOptions` |
+| npm package | `module`, `attrs.third_party: true` | `js:axios`, `js:@scope/pkg` |
+
+Anonymous functions (callbacks, object-literal methods) aren't nodes: their calls count for the
+nearest named function, or the module.
+
+| Code | Edge |
+|---|---|
+| `import ... from "./x"`, `require("./x")`, `export ... from "./x"`, `import("./x")` | `imports`. Relative specifiers resolve like Node and bundlers: the path, then `.ts .tsx .js .jsx .mjs .cjs`, then `/index.*`; a `.js` specifier may name a `.ts` file. Node builtins (`fs`, `node:path`) give no edge; other bare specifiers are npm packages, unless they name a project path |
+| `f()` | `calls` `f`, through imports, `export`/`module.exports`, re-exports (`export {x} from`, `export * from`) and default imports |
+| `new C()` | `calls` the class node. `super(...)` calls the parent's `constructor` |
+| `this.m()` | `calls` `m` found through `extends`, plus every override in a subclass (`attrs.via: "override"`). `this` is the class of the nearest method, through arrow functions only |
+| `x.m()` with `x`'s class known | From `new C()` (exact, or `local_type` via a variable), `this.x = new C()`, a class field, a TypeScript annotation (`p: C`, `private repo: C` parameter properties; `attrs.via: "type_annotation"`, plus overrides) |
+| `x.m()` with `x` unknown | `calls` `m` only if exactly one project class defines it and the name isn't a builtin or Node core method (`push`, `then`, `exit`, `readFile`...); `attrs.via: "unique_method_name"` |
+| `fetch(url, { method })`, `axios.get/post/...(url)`, `node-fetch` | `reads` (GET/HEAD/OPTIONS) or `sends_to` an `http:` node. URLs from literals, template strings and constants, also imported ones |
+| `.query / .execute / .raw / .prepare / .run / .all / .exec` with SQL text | `reads` / `writes` `sql:<table>` nodes, as for Python |
+| Getter and setter access (`npm.flatOptions`) | none: not a call in the source |
+
 ## C
 
 | Thing | Node | Id example |
@@ -104,5 +134,7 @@ with no outside edges.
 - No `extends` edge for inheritance: the graph can't yet say "Square is a Shape". Candidate for
   IR 0.2.
 - Class attributes, globals and module constants (`HANDLERS`, `SHOP`) aren't nodes.
+- JS: object-literal methods aren't nodes; `axios.create({ baseURL })` clients and `tsconfig.json`
+  path aliases aren't followed; destructured parameters don't get types from their annotation.
 - n8n: Code nodes' JavaScript and raw SQL queries aren't analysed; sub-workflow calls
   (`executeWorkflow`) aren't linked to the called workflow yet.

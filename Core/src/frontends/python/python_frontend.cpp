@@ -19,6 +19,7 @@
 #include <unordered_set>
 
 #include "../../ts_util.hpp"
+#include "../common.hpp"
 #include "optum/frontend.hpp"
 #include "optum/http.hpp"
 #include "optum/sql.hpp"
@@ -29,6 +30,8 @@ namespace optum {
 namespace {
 
 namespace fs = std::filesystem;
+using frontends::parallel_for;
+using frontends::read_file;
 
 // ===================================================================== pass 1 data
 
@@ -888,20 +891,6 @@ std::string module_name(const fs::path& rel, bool& is_package) {
   return name;
 }
 
-template <typename F>
-void parallel_for(std::size_t n, unsigned threads, F&& f) {
-  if (threads == 0) threads = std::max(1u, std::thread::hardware_concurrency());
-  threads = static_cast<unsigned>(std::min<std::size_t>(threads, std::max<std::size_t>(n, 1)));
-  std::atomic<std::size_t> next{0};
-  auto worker = [&](unsigned) {
-    for (std::size_t i = next++; i < n; i = next++) f(i);
-  };
-  std::vector<std::thread> pool;
-  for (unsigned t = 1; t < threads; ++t) pool.emplace_back(worker, t);
-  worker(0);
-  for (auto& th : pool) th.join();
-}
-
 }  // namespace
 
 Graph extract_python(const fs::path& path, PythonStats* stats, unsigned threads) {
@@ -943,10 +932,7 @@ Graph extract_python_files(const fs::path& root, const std::vector<fs::path>& re
     m.name = module_name(rel, m.is_package);
     if (m.name.empty()) m.name = base.filename().string();
 
-    std::ifstream in(files[i], std::ios::binary);
-    std::stringstream buf;
-    buf << in.rdbuf();
-    const std::string src = buf.str();
+    const std::string src = read_file(files[i]);
     m.lines = static_cast<std::size_t>(std::count(src.begin(), src.end(), '\n'));
     ts::TreePtr tree(ts_parser_parse_string(parser.get(), nullptr, src.data(), static_cast<uint32_t>(src.size())));
     const TSNode rootn = ts_tree_root_node(tree.get());
