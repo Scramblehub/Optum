@@ -37,6 +37,12 @@ inline std::string read_file(const std::filesystem::path& p) {
   return buf.str();
 }
 
+// Number of lines in a source text: a last line without a trailing newline still counts.
+inline std::size_t count_lines(const std::string& src) {
+  const auto newlines = static_cast<std::size_t>(std::count(src.begin(), src.end(), '\n'));
+  return newlines + (!src.empty() && src.back() != '\n' ? 1 : 0);
+}
+
 // ASCII upper-casing, for HTTP method names.
 inline std::string to_upper(std::string s) {
   for (char& c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));

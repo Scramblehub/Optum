@@ -84,6 +84,12 @@ foreach(dir ${JS_PROGRAMS})
            COMMAND sh -c "$<TARGET_FILE:optum> graph ${dir} -q -o ${out} && $<TARGET_FILE:optum> score ${dir}/expected.json ${out} --min-precision 1 --min-recall ${min_recall}")
 endforeach()
 
+# The last line of a file without a trailing newline counts: this one has 1 line.
+add_test(NAME cli_line_count_without_trailing_newline
+         COMMAND sh -c "d=$(mktemp -d) && printf 'def f(): pass' > $d/a.py && $<TARGET_FILE:optum> graph $d -o /dev/null 2>&1")
+set_tests_properties(cli_line_count_without_trailing_newline PROPERTIES
+                     PASS_REGULAR_EXPRESSION "python: 1 files, 1 lines")
+
 add_test(NAME cli_syntax_tree COMMAND optum syntax-tree ${FIXTURES}/programs/js/classes/shapes.ts)
 set_tests_properties(cli_syntax_tree PROPERTIES PASS_REGULAR_EXPRESSION "\\(program .*class_declaration name: \\(type_identifier\\)")
 

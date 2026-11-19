@@ -26,6 +26,7 @@ namespace {
 
 namespace fs = std::filesystem;
 using frontends::parallel_for;
+using frontends::count_lines;
 using frontends::http_external_node;
 using frontends::read_file;
 using frontends::sql_store_node;
@@ -739,7 +740,7 @@ Graph extract_c_files(const fs::path& root, const std::vector<fs::path>& rel_fil
     ModuleInfo& m = project.mods[i];
     m.path = files[i].generic_string();
     const std::string src = read_file(root / files[i]);
-    m.lines = static_cast<std::size_t>(std::count(src.begin(), src.end(), '\n'));
+    m.lines = count_lines(src);
     ts::TreePtr tree(ts_parser_parse_string(parser.get(), nullptr, src.data(), static_cast<uint32_t>(src.size())));
     const TSNode rootn = ts_tree_root_node(tree.get());
     m.syntax_error = ts_node_has_error(rootn);
