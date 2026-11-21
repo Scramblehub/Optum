@@ -533,3 +533,49 @@ TEST_CASE("c: a macro from a generated header found through -I counts, directly 
   REQUIRE(off);
   CHECK(off->attrs.value("inactive", false));  // the definition of X was seen, so this is certain
 }
+
+TEST_CASE("c: a function defined in several branches of one #if chain is active if any definition is compiled") {
+  TempDir dir;
+  dir.write("lib.c",
+            "#ifndef X\n"
+            "int real_or_stub(int x) { return 1; }\n"
+            "#else\n"
+            "int real_or_stub(int x) { return 0; }\n"
+            "#endif\n"
+            "#ifdef A\n"
+            "int chain(void) { return 1; }\n"
+            "#elif defined(B)\n"
+            "int chain(void) { return 2; }\n"
+            "#elif defined(C)\n"
+            "int chain(void) { return 3; }\n"
+            "#else\n"
+            "int chain(void) { return 4; }\n"
+            "#endif\n"
+            "#if 0\n"
+            "int never(void) { return 1; }\n"
+            "#elif 0\n"
+            "int never(void) { return 2; }\n"
+            "#endif\n");
+  dir.write("main.c",
+            "int real_or_stub(int x);\nint chain(void);\nint never(void);\n"
+            "int main(void) { never(); chain(); return real_or_stub(1); }\n");
+  auto check = [&](const std::string& db) {
+    const optum::Graph g = optum::extract_c_files(dir.path, {"lib.c", "main.c"}, nullptr, 0, db);
+    const optum::Edge* a = find_call(g, "c:main.c#main", "c:lib.c#real_or_stub");
+    const optum::Edge* b = find_call(g, "c:main.c#main", "c:lib.c#chain");
+    const optum::Edge* c = find_call(g, "c:main.c#main", "c:lib.c#never");
+    REQUIRE(a);
+    REQUIRE(b);
+    REQUIRE(c);
+    CHECK(a->confidence == optum::Confidence::Exact);  // X undefined: the first; X defined: the stub
+    CHECK_FALSE(a->attrs.contains("condition"));
+    CHECK(b->confidence == optum::Confidence::Exact);  // only the #else is compiled
+    CHECK_FALSE(b->attrs.value("inactive", false));
+    CHECK(c->confidence == optum::Confidence::Inferred);  // no branch is compiled
+    CHECK(c->attrs.value("inactive", false));
+  };
+  check("none");
+  std::ofstream(dir.path / "cc.json") << "[{\"directory\": \"" << dir.path.generic_string()
+                                      << "\", \"file\": \"lib.c\", \"command\": \"cc -DX=1 -c lib.c\"}]";
+  check((dir.path / "cc.json").string());
+}
