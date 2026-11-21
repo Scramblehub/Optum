@@ -22,10 +22,13 @@ STRIPE = PROXY + ":12111"
 SHOP = PROXY + ":8080/wp-json/wc/v3"
 SHOP_AUTH = "Basic " + base64.b64encode(b"admin:testcoShopApiPassword00").decode()  # fixed test credential (shop/setup.sh)
 MARKER = "testco-loaded"
+# Our own harness (loading, checks) labels its requests, so the proxy can tell them from the
+# company's traffic and Optum doesn't learn from its own test tools (testco/README.md).
+HARNESS = {"X-Optum-Harness": "testco"}
 
 
 def http_json(url, payload):
-    req = urllib.request.Request(url, json.dumps(payload).encode(), {"Content-Type": "application/json"})
+    req = urllib.request.Request(url, json.dumps(payload).encode(), {"Content-Type": "application/json", **HARNESS})
     out = json.loads(urllib.request.urlopen(req, timeout=300).read())
     if out.get("error"):
         raise RuntimeError(out["error"]["data"]["message"][:400])
@@ -95,7 +98,7 @@ def load_accounting(odoo, data, ids):
 
 def shop_api(method, path, payload=None):
     req = urllib.request.Request(SHOP + path, None if payload is None else json.dumps(payload).encode(), method=method,
-                                 headers={"Authorization": SHOP_AUTH, "Content-Type": "application/json"})
+                                 headers={"Authorization": SHOP_AUTH, "Content-Type": "application/json", **HARNESS})
     return json.loads(urllib.request.urlopen(req, timeout=300).read())
 
 
@@ -149,7 +152,7 @@ def load_payments(data, ids):
     """stripe-mock keeps nothing, so 'loading' is the traffic itself: the customers and charges
     the shop's checkout would create, recorded by the proxy."""
     auth = {"Authorization": "Basic " + base64.b64encode(b"sk_test_123:").decode(),
-            "Content-Type": "application/x-www-form-urlencoded"}
+            "Content-Type": "application/x-www-form-urlencoded", **HARNESS}
     import urllib.parse
     n = 0
     for r in data["records"][:300]:  # a sample of checkouts is enough traffic to learn from

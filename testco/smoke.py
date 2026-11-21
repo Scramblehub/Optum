@@ -21,7 +21,7 @@ def http(method, url, data=None, headers=None, form=False):
     body = None
     if data is not None:
         body = urllib.parse.urlencode(data).encode() if form else json.dumps(data).encode()
-    req = urllib.request.Request(url, data=body, method=method, headers=headers or {})
+    req = urllib.request.Request(url, data=body, method=method, headers={**(headers or {}), "X-Optum-Harness": "testco"})
     if body is not None:
         req.add_header("Content-Type", "application/x-www-form-urlencoded" if form else "application/json")
     with urllib.request.urlopen(req, timeout=20) as r:

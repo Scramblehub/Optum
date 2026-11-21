@@ -104,6 +104,12 @@ services:
     build: ./company
     volumes: ["./company:/company:ro", "./driver:/driver:ro", "./data:/data"]
 
+  # The business driver (driver/business_day.py): stands in for customers and Stripe, in its own
+  # container so its traffic is recorded as theirs, not the company's.
+  driver:
+    build: ./company
+    volumes: ["./company:/company:ro", "./driver:/driver:ro", "./data:/data"]
+
   hooks:
     image: node:22-alpine
     command: ["node", "/company/payments_webhook.js"]

@@ -6,6 +6,7 @@ name (payments, accounting, automation...). Lines go to $RECORDINGS_DIR/<tool>.j
 import datetime
 import json
 import os
+import socket
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -17,6 +18,22 @@ DIR = os.environ.get("RECORDINGS_DIR", "/recordings")
 class Recorder:
     def __init__(self):
         os.makedirs(DIR, exist_ok=True)
+        self.names = {}
+
+    def client(self, flow):
+        """Who called: the calling container's service name (testco-automation-1... -> automation), from
+        its address; the address itself if it has no name."""
+        ip = flow.client_conn.peername[0] if flow.client_conn.peername else ""
+        if ip not in self.names:
+            try:
+                name = socket.gethostbyaddr(ip)[0].split(".")[0]
+                parts = name.split("-")
+                if len(parts) >= 3 and parts[-1].isdigit():  # compose names: <project>-<service>-<n>
+                    name = "-".join(parts[1:-1])
+            except (OSError, IndexError):
+                name = ip
+            self.names[ip] = name
+        return self.names[ip]
 
     @staticmethod
     def _write(tool, line):
@@ -38,6 +55,10 @@ class Recorder:
             dict(req.query.items(multi=False)) if req.query else {}, dict(req.headers.items(multi=False)),
             req.get_content(strict=False), req.headers.get("content-type"), resp.status_code,
             dict(resp.headers.items(multi=False)), resp.get_content(strict=False), resp.headers.get("content-type"))
+        rec["client"] = self.client(flow)
+        harness = req.headers.get("x-optum-harness")
+        if harness:  # our own loading and checking tools, not the company's traffic
+            rec["harness"] = harness
         self._write(tool, json.dumps(rec, ensure_ascii=False))
 
 

@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """A day of trading at the test company: new orders, card charges, payment events.
 
-    docker compose exec company python /driver/business_day.py [--orders 20] [--seed 7] [--sync]
+    docker compose exec driver python /driver/business_day.py [--orders 20] [--seed 7]
+    docker compose exec company python nightly_sync.py      # the company's own nightly run, if wanted
 
 Each order: placed in the shop (pending), charged through payments, and the "charge succeeded"
 event sent to the payments webhook, which marks it paid. Then the glue takes over: the n8n flow
-(every 5 minutes) or, with --sync, the nightly script at the end of the day. Every new order is
+(every 5 minutes), or the company's nightly script if it's run (in the company's container, so
+its traffic is recorded as the company's). Every new order is
 written to /data/live_orders.json, so check_glue.py can confirm each ends up completed with one
 invoice. Not the company's code (so it's kept out of company/, which Optum analyses): a stand-in
 for its customers and Stripe.
@@ -29,7 +31,6 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--orders", type=int, default=20)
     ap.add_argument("--seed", type=int, default=7)
-    ap.add_argument("--sync", action="store_true", help="run the nightly sync at the end of the day")
     a = ap.parse_args()
     rng = random.Random(a.seed)
     customers = requests.get(SHOP + "/customers", params={"per_page": 100}, auth=SHOP_AUTH, timeout=60).json()
@@ -51,9 +52,6 @@ def main():
                      "webhook_status": hook.status_code})
     json.dump(live, open(LIVE, "w"), indent=1)
     print(f"business day: {a.orders} orders placed, charged and paid ({len(live)} live orders in all)")
-    if a.sync:
-        import nightly_sync
-        nightly_sync.sync()
 
 
 if __name__ == "__main__":
