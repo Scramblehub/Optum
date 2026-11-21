@@ -186,3 +186,12 @@ deployment is never more certain than "declared"), keeps the four kinds of equiv
 (functional, data, behavioural: not claimed without a replay, operational), and lists the inputs
 it rests on by content hash: `optum model --check model.json` shows which conclusions went stale
 when a file changed. The answer key is checked by a ctest (`testco_model`) on hand-made recordings.
+
+**Workflows.** The same command reads the recordings as a process: every write is tied to the
+order it belongs to (by the record's own id, a field named `order_id`, or text such as `ref:
+"order 41"`, which is weaker, and every link says which), and each order's steps in time order
+become the paths orders take, with case counts and the median time of each transition. On the
+first run's recordings: 60 orders. The old glue's path (webhook marks the order paid, then the
+n8n flow invoices it, posts it, completes the order) and the owned service's are both there, as
+are the rehearsed fallback and the replayed bug orders. The n8n flow's polling shows up as the
+slowest transition.

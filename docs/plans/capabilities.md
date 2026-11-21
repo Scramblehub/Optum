@@ -110,9 +110,9 @@ paths, thicker where more frequent, before and after a change) suits task maps.
 | # | Work | Sharpens | When |
 |---|---|---|---|
 | 1 | Held-out evaluation and the per-relationship gate | plateau loop | now (gate in #61; held-out run with round 2) |
-| 2 | Operation and data layers, then replaceability classes, on the test company with an answer key (stage 1 is the proof: the n8n flow really was replaceable) | `feat/unified-model` | next |
-| 3 | The evidence model (provenance, weakest-link confidence, coverage, abstention, staleness), built into item 2 from its first commit | `feat/unified-model` | with item 2 |
-| 4 | Workflows and capabilities over item 2 | `feat/unified-model` | after item 2 |
+| 2 | Operation and data layers, then replaceability classes, on the test company with an answer key (stage 1 is the proof: the n8n flow really was replaceable) | `feat/unified-model` | done (`optum model`, #64) |
+| 3 | The evidence model (provenance, weakest-link confidence, coverage, abstention, staleness), built into item 2 from its first commit | `feat/unified-model` | done, with item 2 |
+| 4 | Workflows (done: process mining over the recordings in `optum model`, cases linked across systems with the evidence for each link) and capabilities over them | `feat/unified-model` | workflows done; capabilities next |
 | 5 | Counterfactual architecture | `feat/what-if` | as planned |
 | 6 | Facts and estimates in the cost model | `feat/cost-model` | as planned |
 | 7 | Interface usage and accessibility: navigation graph and mismatch per role, from recorded UI sessions (the shop's admin first) | builder's suite, console | after the console skeleton |

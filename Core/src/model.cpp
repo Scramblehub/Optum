@@ -1,6 +1,8 @@
 #include "optum/model.hpp"
 
 #include <algorithm>
+#include <cctype>
+#include <cstdio>
 #include <fstream>
 #include <iomanip>
 #include <map>
@@ -166,6 +168,244 @@ std::string weakest(const std::set<std::string>& kinds) {
   return "exact";
 }
 
+
+// ---------------------------------------------------------------------------------- workflows
+//
+// Process mining over the recordings: every write is tied to the business record it belongs to
+// (a case: an order), steps are who did what, and a workflow is the sequences of steps cases go
+// through, with how many cases and how long each transition takes. Links are evidence too:
+// a record's own id, a field named after the case's resource (order_id), or text mentioning it
+// ("order 41", weaker). Ambiguous matches are skipped, never guessed.
+
+// Seconds since the epoch from an ISO-8601 UTC time ("2026-11-20T10:00:01.123Z" or "+00:00").
+double epoch_seconds(const std::string& t) {
+  int y = 0, mo = 0, d = 0, h = 0, mi = 0;
+  double sec = 0;
+  if (std::sscanf(t.c_str(), "%d-%d-%dT%d:%d:%lf", &y, &mo, &d, &h, &mi, &sec) != 6) return -1;
+  y -= mo <= 2;  // days from civil (H. Hinnant)
+  const int era = (y >= 0 ? y : y - 399) / 400;
+  const int yoe = y - era * 400;
+  const int doy = (153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+  const int doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  const long long days = static_cast<long long>(era) * 146097 + doe - 719468;
+  return static_cast<double>(days) * 86400.0 + h * 3600.0 + mi * 60.0 + sec;
+}
+
+std::string id_text(const json& v) {
+  if (v.is_number_integer()) return std::to_string(v.get<long long>());
+  if (v.is_string()) {
+    const auto& str = v.get_ref<const std::string&>();
+    if (!str.empty() && std::all_of(str.begin(), str.end(), [](char ch) { return ch >= '0' && ch <= '9'; })) return str;
+  }
+  return "";
+}
+
+// The last name in a field path: metadata[order_id] -> order_id, data.object.metadata.order_id -> order_id.
+std::string last_name(const std::string& key) {
+  std::string k = key;
+  while (!k.empty() && k.back() == ']') k.pop_back();
+  const auto cut = k.find_last_of(".[");
+  return cut == std::string::npos ? k : k.substr(cut + 1);
+}
+
+void flatten(const json& v, const std::string& prefix, std::vector<std::pair<std::string, json>>& out, int depth = 0) {
+  if (depth > 6) return;
+  if (v.is_object()) {
+    for (const auto& [k, x] : v.items()) flatten(x, prefix.empty() ? k : prefix + "." + k, out, depth + 1);
+  } else if (v.is_array()) {
+    for (const auto& x : v) flatten(x, prefix, out, depth + 1);
+  } else {
+    out.emplace_back(prefix, v);  // a copy: the record it came from may be a temporary
+  }
+}
+
+struct Event {
+  double at;
+  std::string step, record, refs_field, refs_text;  // record: "system|resource|id"
+  std::string resource_key;                          // "system|resource" of its own record
+  bool lifecycle = false;                            // it sets a status on its record
+};
+
+ojson derive_workflows(const std::map<std::string, std::vector<json>>& by_tool,
+                       const std::map<std::string, std::string>& actor_of) {
+  std::vector<Event> events;
+  std::vector<std::vector<std::pair<std::string, json>>> values;  // per event: its fields, flattened
+  std::map<std::string, std::set<std::string>> records;           // "system|resource" -> ids
+  std::map<std::string, std::set<std::string>> lifecycle_records;  // the same, for records whose status is set
+  for (const auto& [tool, recs] : by_tool) {
+    for (const auto& r : recs) {
+      const std::string method = r.value("method", "");
+      const std::string raw_path = r.value("path", "");
+      const std::string path = template_path(raw_path);
+      const json body = r.contains("request") && r["request"].is_object() && r["request"].contains("body") ? r["request"]["body"] : json();
+      const json resp = r.contains("response") && r["response"].is_object() && r["response"].contains("body") ? r["response"]["body"] : json();
+      std::string action, resource, own;
+      const json* fields = &body;
+      const json params = body.is_object() && body.contains("params") ? body["params"] : json();
+      const bool rpc = params.is_object() && params.value("service", "") == "object" && params.contains("args") &&
+                       params["args"].is_array() && params["args"].size() >= 5;
+      if (rpc) {
+        const json& args = params["args"];
+        resource = args[3].is_string() ? args[3].get<std::string>() : "";
+        const std::string m = args[4].is_string() ? args[4].get<std::string>() : "";
+        if (access_of("rpc " + resource + "." + m, "POST") != "write") continue;
+        const json rest = args.size() > 5 ? args[5] : json::array();
+        if (m == "create") {
+          action = "create " + resource;
+          own = id_text(resp.is_object() && resp.contains("result") ? resp["result"] : json());
+          if (rest.is_array() && !rest.empty()) fields = &args[5][0];
+        } else {
+          action = (m == "write" ? "update " : m + " ") + resource;
+          const json first = rest.is_array() && !rest.empty() ? rest[0] : json();
+          own = id_text(first.is_array() && !first.empty() ? first[0] : first);
+        }
+      } else {
+        if (method == "GET" || method == "HEAD" || method == "OPTIONS" || method.empty()) continue;
+        std::string last_raw;
+        {
+          const auto cut = raw_path.find_last_of('/');
+          last_raw = cut == std::string::npos ? raw_path : raw_path.substr(cut + 1);
+        }
+        const bool path_has_id = path.ends_with("/{}");
+        std::string res_path = path_has_id ? path.substr(0, path.size() - 3) : path;
+        const auto cut = res_path.find_last_of('/');
+        resource = cut == std::string::npos ? res_path : res_path.substr(cut + 1);
+        const json& status = body.is_object() && body.contains("status") ? body["status"] : json();
+        if (path_has_id) own = last_raw;
+        else if (resp.is_object() && resp.contains("id")) own = id_text(resp["id"]);
+        if (status.is_string()) action = "set status " + status.get<std::string>();
+        else if (method == "POST") action = own.empty() ? "send to " + resource : "create " + resource;
+        else if (method == "DELETE") action = "delete " + resource;
+        else action = "update " + resource;
+      }
+      const json& cl = r.contains("client") ? r["client"] : json();
+      const std::string client = cl.is_string() ? cl.get<std::string>() : "unknown";
+      const auto ait = actor_of.find(client + "|" + tool + "|" + method + " " + path);
+      Event e;
+      e.at = epoch_seconds(r.value("started", ""));
+      e.step = (ait == actor_of.end() ? client : ait->second) + ": " + action;
+      e.resource_key = tool + "|" + resource;
+      e.record = own.empty() ? "" : e.resource_key + "|" + own;
+      e.lifecycle = action.starts_with("set status");
+      if (!own.empty()) {
+        records[e.resource_key].insert(own);
+        if (e.lifecycle) lifecycle_records[e.resource_key].insert(own);
+      }
+      events.push_back(e);
+      std::vector<std::pair<std::string, json>> flat;
+      flatten(*fields, "", flat);
+      values.push_back(std::move(flat));
+    }
+  }
+  // The case: the resource with a lifecycle (its status set by writes) and the most records.
+  std::string case_key;
+  for (const auto& [k, ids] : lifecycle_records) {
+    if (case_key.empty() || ids.size() > lifecycle_records[case_key].size()) case_key = k;
+  }
+  ojson out = ojson::object();
+  if (case_key.empty()) {
+    out["case"] = nullptr;
+    out["note"] = "no record with a lifecycle (a status set by writes) in the recordings";
+    return out;
+  }
+  const std::string case_system = case_key.substr(0, case_key.find('|'));
+  const std::string case_resource = case_key.substr(case_key.find('|') + 1);
+  std::string singular = case_resource;
+  if (singular.size() > 1 && singular.back() == 's') singular.pop_back();
+  const std::set<std::string>& case_ids = records[case_key];
+
+  std::vector<std::size_t> order(events.size());
+  for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+  std::stable_sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) { return events[a].at < events[b].at; });
+  std::map<std::string, std::string> linked;  // record -> case id
+  std::map<std::string, std::vector<std::pair<double, std::string>>> steps;  // case id -> (time, step)
+  std::map<std::string, long long> basis;
+  long long unlinked = 0;
+  for (const std::size_t i : order) {
+    const Event& e = events[i];
+    std::string c, why;
+    if (!e.record.empty() && e.resource_key == case_key) {
+      c = e.record.substr(e.record.rfind('|') + 1);
+      why = "own id";
+    } else if (!e.record.empty() && linked.count(e.record)) {
+      c = linked[e.record];
+      why = "linked record";
+    } else {
+      std::set<std::string> by_field, by_text;
+      for (const auto& [key, v] : values[i]) {
+        const std::string name = last_name(key);
+        if (name == singular + "_id" || name == singular) {
+          const std::string id = id_text(v);
+          if (case_ids.count(id)) by_field.insert(id);
+        } else if (v.is_string()) {
+          const auto& str = v.get_ref<const std::string&>();
+          if (std::none_of(str.begin(), str.end(), [](char ch) { return std::isalpha(static_cast<unsigned char>(ch)); })) continue;
+          std::string tok;
+          for (std::size_t k = 0; k <= str.size(); ++k) {
+            if (k < str.size() && std::isdigit(static_cast<unsigned char>(str[k]))) tok += str[k];
+            else {
+              if (!tok.empty() && case_ids.count(tok)) by_text.insert(tok);
+              tok.clear();
+            }
+          }
+        }
+      }
+      if (by_field.size() == 1) {
+        c = *by_field.begin();
+        why = "field named " + singular + "_id";
+      } else if (by_field.empty() && by_text.size() == 1) {
+        c = *by_text.begin();
+        why = "text mentioning the " + singular + " (weaker)";
+      }
+    }
+    if (c.empty()) {
+      ++unlinked;
+      continue;
+    }
+    if (!e.record.empty() && !linked.count(e.record)) linked[e.record] = c;
+    basis[why]++;
+    steps[c].emplace_back(e.at, e.step);
+  }
+
+  // Variants (each case's sequence of steps, repeats collapsed) and transitions with timings.
+  std::map<std::vector<std::string>, long long> variants;
+  std::map<std::pair<std::string, std::string>, std::vector<double>> trans;
+  for (auto& [c, seq] : steps) {
+    std::vector<std::string> v;
+    std::vector<double> at;
+    for (const auto& [t, st] : seq) {
+      if (!v.empty() && v.back() == st) continue;
+      v.push_back(st);
+      at.push_back(t);
+    }
+    variants[v]++;
+    for (std::size_t k = 1; k < v.size(); ++k) trans[{v[k - 1], v[k]}].push_back(at[k] - at[k - 1]);
+  }
+  std::vector<std::pair<std::vector<std::string>, long long>> vs(variants.begin(), variants.end());
+  std::stable_sort(vs.begin(), vs.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+  ojson variants_json = ojson::array();
+  for (std::size_t k = 0; k < vs.size() && k < 10; ++k) variants_json.push_back({{"cases", vs[k].second}, {"steps", vs[k].first}});
+  std::vector<std::pair<std::pair<std::string, std::string>, std::vector<double>>> ts(trans.begin(), trans.end());
+  std::stable_sort(ts.begin(), ts.end(), [](const auto& a, const auto& b) { return a.second.size() > b.second.size(); });
+  ojson trans_json = ojson::array();
+  for (auto& [ft, secs] : ts) {
+    std::sort(secs.begin(), secs.end());
+    const double median = secs.size() % 2 ? secs[secs.size() / 2] : (secs[secs.size() / 2 - 1] + secs[secs.size() / 2]) / 2;
+    trans_json.push_back({{"from", ft.first}, {"to", ft.second}, {"cases", static_cast<long long>(secs.size())},
+                          {"median_seconds", static_cast<double>(static_cast<long long>(median * 10.0 + 0.5)) / 10.0}});
+  }
+  ojson basis_json = ojson::object();
+  for (const auto& [b, n] : basis) basis_json[b] = n;
+  out["case"] = case_system + " " + case_resource;
+  out["cases"] = static_cast<long long>(steps.size());
+  out["variants"] = variants_json;
+  out["more_variants"] = vs.size() > 10 ? static_cast<long long>(vs.size() - 10) : 0;
+  out["transitions"] = trans_json;
+  out["linked_by"] = basis_json;
+  out["writes_not_linked"] = unlinked;
+  return out;
+}
+
 }  // namespace
 
 ojson build_model(const ModelInputs& in) {
@@ -242,6 +482,8 @@ ojson build_model(const ModelInputs& in) {
     std::string key;
   };
   std::vector<Outside> outside;
+  std::map<std::string, std::string> actor_of;  // "client|system|METHOD /path" -> component(s) or the client
+  ojson workflows = ojson::object();
   ojson window = ojson::array({nullptr, nullptr});
   std::set<std::string> never_ran_flows;
   if (!in.recordings.empty()) {
@@ -295,6 +537,7 @@ ojson build_model(const ModelInputs& in) {
             const auto& se = comps[u].static_endpoints;
             if (se.count(ep_key(tool, method, path)) || se.count(ep_key(tool, "", path))) reach.push_back(u);
           }
+          actor_of[client + "|" + tool + "|" + endpoint] = reach.empty() ? client : join(reach, " or ");
           if (reach.empty()) {
             const auto ait = dep.actors.find(client);
             outside.push_back({client, ait == dep.actors.end() ? "" : ait->second, tool, opname, op.access,
@@ -323,6 +566,11 @@ ojson build_model(const ModelInputs& in) {
         }
       }
     }
+  }
+  if (!in.recordings.empty()) {
+    InferOptions io;
+    io.recordings = in.recordings;
+    workflows = derive_workflows(load_recordings(io), actor_of);
   }
   // An endpoint seen in traffic is described by what was observed on it; the static placeholder
   // (POST /jsonrpc) hands its functions to the observed operations and goes.
@@ -597,6 +845,7 @@ ojson build_model(const ModelInputs& in) {
   m["components"] = components;
   m["systems"] = systems;
   m["outside_the_code"] = unattributed;
+  m["workflows"] = workflows;
   m["classes"] = {
       {"independently_removable", "nothing depends on it, and it never ran or everything it writes is also written by another component (the condition says which must stay)"},
       {"replaceable_after_dependents_change", "covered like the above, but other components depend on it and must change first"},
@@ -625,6 +874,23 @@ std::string model_markdown(const ojson& m) {
     const auto& r = sys["replaceability"];
     s << "| " << sys["name"].get<std::string>() << " | " << r["class"].get<std::string>() << " | "
       << r["reason"].get<std::string>() << " |\n";
+  }
+  if (m.contains("workflows") && m["workflows"].contains("cases")) {
+    const auto& w = m["workflows"];
+    s << "\n## Workflow: " << w["case"].get<std::string>() << " (" << w["cases"].dump() << " cases)\n\n";
+    s << "Most common paths:\n\n";
+    for (std::size_t k = 0; k < w["variants"].size() && k < 3; ++k) {
+      const auto& v = w["variants"][k];
+      std::string steps;
+      for (const auto& st : v["steps"]) steps += (steps.empty() ? "" : " → ") + st.get<std::string>();
+      s << "- " << v["cases"].dump() << " cases: " << steps << "\n";
+    }
+    s << "\n| From | To | Cases | Median time |\n|---|---|---|---|\n";
+    for (std::size_t k = 0; k < w["transitions"].size() && k < 12; ++k) {
+      const auto& t = w["transitions"][k];
+      s << "| " << t["from"].get<std::string>() << " | " << t["to"].get<std::string>() << " | " << t["cases"].dump()
+        << " | " << t["median_seconds"].dump() << " s |\n";
+    }
   }
   if (!m["outside_the_code"].empty()) {
     s << "\nTraffic from outside the analysed code: ";
