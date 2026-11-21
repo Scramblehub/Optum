@@ -1,6 +1,7 @@
 #include "optum/frontend.hpp"
 
 #include <fnmatch.h>
+#include <string.h>
 
 #include <algorithm>
 #include <unordered_map>
@@ -221,8 +222,11 @@ class ExternalFrontend : public Frontend {
     if (diagnostics) *diagnostics = r.err;
     if (r.timed_out) fail(std::string(what) + ": no answer within " + std::to_string(timeout_.count() / 1000) + " s");
     if (r.exit_code != 0) {
-      fail(std::string(what) + ": exited with status " + std::to_string(r.exit_code) +
-           (r.err.empty() ? "" : "; last output:\n" + tail(r.err, 5)));
+      // A crash has no exit status (it reads -1): name the signal instead.
+      const std::string how = r.term_signal ? "killed by signal " + std::to_string(r.term_signal) + " (" +
+                                                  std::string(strsignal(r.term_signal)) + ")"
+                                            : "exited with status " + std::to_string(r.exit_code);
+      fail(std::string(what) + ": " + how + (r.err.empty() ? "" : "; last output:\n" + tail(r.err, 5)));
     }
     try {
       return nlohmann::json::parse(r.out);

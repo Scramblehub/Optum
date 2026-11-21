@@ -14,7 +14,7 @@ optum graph ./repo --adapter "python3 adapters/my_adapter.py"
 optum frontends ./repo --adapter "python3 adapters/my_adapter.py"   # which files it would get
 ```
 
-`--adapter` can be given several times. Optum's built-in Python frontend always runs too. All the
+`--adapter` can be given several times. Optum's built-in frontends (Python, JS/TS, C, ELF) always run too. All the
 graphs are merged by node id.
 
 ## The two requests

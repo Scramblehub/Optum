@@ -15,7 +15,19 @@ std::vector<std::string> tokenize(std::string_view s) {
   std::vector<std::string> out;
   std::size_t i = 0;
   while (i < s.size()) {
-    if (ident_char(s[i])) {
+    if (s[i] == '\'') {
+      // A string literal is one opaque token: words inside it ('moved from archive') aren't SQL.
+      // A doubled quote ('it''s') is an escaped quote, not the end.
+      std::size_t j = i + 1;
+      while (j < s.size()) {
+        if (s[j] == '\'' && j + 1 < s.size() && s[j + 1] == '\'') j += 2;
+        else if (s[j] == '\'') break;
+        else ++j;
+      }
+      j = std::min(j + 1, s.size());  // past the closing quote (or the end, if it never closes)
+      out.emplace_back(s.substr(i, j - i));
+      i = j;
+    } else if (ident_char(s[i])) {
       std::size_t j = i;
       while (j < s.size() && ident_char(s[j])) {
         // A quoted identifier ("My Table", `t`, [t]) runs to its closing quote, spaces included.
@@ -242,8 +254,23 @@ SqlTables sql_tables(std::string_view sql) {
     return toks.size();
   };
 
+  // FROM also appears inside EXTRACT(YEAR FROM d), TRIM(BOTH ' ' FROM s), SUBSTRING(s FROM 2) and
+  // OVERLAY(...): there it is syntax, and what follows is a column, not a table.
+  std::vector<bool> in_function_from;  // per open parenthesis: is it one of those calls?
+  auto takes_from = [](const std::string& fn) {
+    return fn == "EXTRACT" || fn == "TRIM" || fn == "SUBSTRING" || fn == "OVERLAY" || fn == "POSITION";
+  };
   for (std::size_t i = 0; i < toks.size(); ++i) {
     const std::string u = upper(toks[i]);
+    if (toks[i] == "(") {
+      in_function_from.push_back(i > 0 && takes_from(upper(toks[i - 1])));
+      continue;
+    }
+    if (toks[i] == ")") {
+      if (!in_function_from.empty()) in_function_from.pop_back();
+      continue;
+    }
+    if (u == "FROM" && !in_function_from.empty() && in_function_from.back()) continue;
     std::vector<std::string>* list = nullptr;
     std::size_t at = toks.size();
     if (u == "INSERT" || u == "REPLACE" || u == "MERGE") {

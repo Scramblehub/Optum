@@ -27,6 +27,14 @@ TEST_CASE("run_process: stdin to stdout, exit codes, stderr") {
   REQUIRE(r.err == "oops\n");
 }
 
+TEST_CASE("run_process: a child killed by a signal says which") {
+  auto r = run_process({"sh", "-c", "kill -KILL $$"}, "", std::chrono::seconds(5));
+  REQUIRE(r.term_signal == 9);
+  REQUIRE(r.exit_code == -1);
+  r = run_process({"sh", "-c", "exit 4"}, "", std::chrono::seconds(5));
+  REQUIRE(r.term_signal == 0);
+}
+
 TEST_CASE("run_process: large input and output don't deadlock") {
   const std::string big(4 * 1024 * 1024, 'x');
   const auto r = run_process({"cat"}, big, std::chrono::seconds(20));

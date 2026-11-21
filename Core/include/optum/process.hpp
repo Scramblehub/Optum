@@ -10,6 +10,7 @@ namespace optum {
 
 struct ProcessResult {
   int exit_code = -1;      // -1 if killed or not started
+  int term_signal = 0;     // the signal that ended it (a crash), if one did
   bool timed_out = false;
   std::string out;
   std::string err;

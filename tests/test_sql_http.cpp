@@ -107,3 +107,26 @@ TEST_CASE("sql: declared one-column keys") {
           Cols{{"t", {"sku"}}});  // the two-column key identifies neither column alone
   REQUIRE(sql_tables("CREATE TABLE t (a INT, CONSTRAINT pk PRIMARY KEY (a))").keys == Cols{{"t", {"a"}}});
 }
+
+TEST_CASE("sql: FROM inside EXTRACT, TRIM and SUBSTRING is syntax, not a table") {
+  // These once read created_at, name and title as tables.
+  REQUIRE(sql_tables("SELECT EXTRACT(YEAR FROM created_at), id FROM orders").reads == V{"orders"});
+  REQUIRE(sql_tables("SELECT TRIM(BOTH ' ' FROM name) FROM people").reads == V{"people"});
+  REQUIRE(sql_tables("SELECT SUBSTRING(title FROM 2 FOR 3) FROM posts p JOIN authors a ON 1").reads ==
+          V{"posts", "authors"});
+  // A subquery inside such a call still counts.
+  REQUIRE(sql_tables("SELECT EXTRACT(YEAR FROM (SELECT max(d) FROM events)) FROM dual").reads == V{"events", "dual"});
+}
+
+TEST_CASE("sql: words inside a string literal aren't tables") {
+  // 'moved from archive' once made `archive` a table the code reads.
+  REQUIRE(sql_tables("SELECT id FROM tickets WHERE note = 'moved from archive'").reads == V{"tickets"});
+  REQUIRE(sql_tables("SELECT id FROM tickets WHERE note = 'it''s from the old system'").reads == V{"tickets"});
+  REQUIRE(sql_tables("UPDATE tickets SET note = 'copied from backup' WHERE id = 1").writes == V{"tickets"});
+  REQUIRE(sql_tables("UPDATE tickets SET note = 'copied from backup' WHERE id = 1").reads.empty());
+  // An unterminated literal ends at the end of the text instead of running off it.
+  REQUIRE(sql_tables("SELECT id FROM tickets WHERE note = 'oops from nowhere").reads == V{"tickets"});
+  // The columns of a select list skip literals.
+  using Cols = std::vector<std::pair<std::string, std::vector<std::string>>>;
+  REQUIRE(sql_tables("SELECT 'a b' AS kind, id, email FROM customers").columns == Cols{{"customers", {"id", "email"}}});
+}

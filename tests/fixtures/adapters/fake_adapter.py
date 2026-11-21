@@ -1,9 +1,11 @@
 """An adapter that misbehaves on purpose, to test how Optum handles it.
 
 Usage: fake_adapter.py <mode> describe|extract
-Modes: ok, patch_protocol, bad_protocol, newer_minor, crash, not_json, bad_graph, slow
+Modes: ok, patch_protocol, bad_protocol, newer_minor, crash, killed, not_json, bad_graph, slow
 """
 import json
+import os
+import signal
 import sys
 import time
 
@@ -21,6 +23,10 @@ json.load(sys.stdin)
 if mode == "crash":
     print("something broke inside the adapter", file=sys.stderr)
     sys.exit(3)
+if mode == "killed":
+    print("about to die", file=sys.stderr)
+    sys.stderr.flush()
+    os.kill(os.getpid(), signal.SIGKILL)
 if mode == "not_json":
     print("this is not json")
 elif mode == "bad_graph":

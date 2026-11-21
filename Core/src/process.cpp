@@ -134,6 +134,7 @@ ProcessResult run_process(const std::vector<std::string>& argv, const std::strin
   }
   if (r.timed_out) waitpid(pid, &status, 0);  // SIGKILLed, so this returns promptly
   if (!r.timed_out && WIFEXITED(status)) r.exit_code = WEXITSTATUS(status);
+  if (!r.timed_out && WIFSIGNALED(status)) r.term_signal = WTERMSIG(status);
   return r;
 }
 
