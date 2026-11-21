@@ -1,6 +1,7 @@
 #include "optum/elf.hpp"
 
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 
 #include "optum/ir.hpp"
@@ -177,6 +178,8 @@ File read(const std::filesystem::path& p) {
   File f;
   f.path = p;
   {
+    std::error_code ec;
+    if (std::filesystem::is_directory(p, ec)) throw IrError(p.string() + ": is a directory, not an ELF file");
     std::ifstream in(p, std::ios::binary);
     if (!in) throw IrError(p.string() + ": cannot open");
     // One sized read: copying through an istreambuf_iterator is a byte-at-a-time loop, which took

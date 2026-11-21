@@ -133,8 +133,10 @@ void unused_code(const Graph& g, const std::vector<NodeIndex>& unit, std::vector
       }
     }
     // Inside something already reported: the outer definition says it.
+    // (A saved graph can hold `defines` cycles, so the walk is bounded like units_of's.)
     bool inside = false;
-    for (NodeIndex p = parent[i]; p != parent[p] && !inside; p = parent[p]) inside = reported[p];
+    NodeIndex p = parent[i];
+    for (int steps = 0; steps < 64 && p != parent[p] && !inside; ++steps, p = parent[p]) inside = reported[p];
     if (inside) continue;
     reported[i] = true;
     by_component[component_of(g.node(unit[i]))].push_back({i, callers[i] > 0 || n.attrs.value("referenced_by_tests", false)});

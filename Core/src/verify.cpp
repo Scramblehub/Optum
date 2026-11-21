@@ -8,8 +8,15 @@ VerifyReport verify(const Graph& g, const nlohmann::json& trace) {
   if (!trace.is_object() || !trace.contains("calls") || !trace["calls"].is_array()) {
     throw IrError("trace: expected an object with a \"calls\" array");
   }
-  const std::string version = trace.value("trace_version", "");
-  if (version.rfind("0.1", 0) != 0) throw IrError("trace: unsupported trace_version '" + version + "' (this build reads 0.1)");
+  // "0.1" or "0.1.x"; not "0.10" or "0.1abc". A missing or non-string version is said as such.
+  const auto vit = trace.find("trace_version");
+  if (vit == trace.end() || !vit->is_string()) {
+    throw IrError("trace: missing \"trace_version\" (a string; this build reads 0.1)");
+  }
+  const std::string version = vit->get<std::string>();
+  if (version != "0.1" && !version.starts_with("0.1.")) {
+    throw IrError("trace: unsupported trace_version '" + version + "' (this build reads 0.1)");
+  }
 
   std::set<std::pair<std::string, std::string>> exact, inferred;
   for (const Edge& e : g.edges()) {

@@ -20,3 +20,11 @@ if(EXISTS /dev/full)
            COMMAND sh -c "$<TARGET_FILE:optum> graph ${CLI_SAMPLE} -q -o /dev/full 2>&1; test $? -eq 2")
   set_tests_properties(cli_write_failure_reported PROPERTIES PASS_REGULAR_EXPRESSION "error writing /dev/full")
 endif()
+
+# A directory where a graph (or a binary) is expected is an error message, not an abort.
+add_test(NAME cli_check_directory_is_an_error
+         COMMAND sh -c "$<TARGET_FILE:optum> check ${CMAKE_SOURCE_DIR}/tests 2>&1; test $? -eq 1")
+set_tests_properties(cli_check_directory_is_an_error PROPERTIES PASS_REGULAR_EXPRESSION "is a directory, not a graph JSON file")
+add_test(NAME cli_disasm_directory_is_an_error
+         COMMAND sh -c "$<TARGET_FILE:optum> disasm ${CMAKE_SOURCE_DIR}/tests 2>&1; test $? -eq 1")
+set_tests_properties(cli_disasm_directory_is_an_error PROPERTIES PASS_REGULAR_EXPRESSION "is a directory, not an ELF file")

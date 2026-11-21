@@ -12,6 +12,7 @@ add_executable(optum_tests
   test_c_frontend.cpp
   test_elf.cpp
   test_dwarf.cpp
+  test_malformed_graphs.cpp
 )
 target_link_libraries(optum_tests PRIVATE optum_core Catch2::Catch2WithMain)
 target_compile_definitions(optum_tests PRIVATE OPTUM_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")

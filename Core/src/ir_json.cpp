@@ -1,5 +1,6 @@
 #include <charconv>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <initializer_list>
 
@@ -209,6 +210,8 @@ Graph graph_from_json(const json& j) {
 }
 
 Graph load_graph(const std::string& path) {
+  std::error_code ec;
+  if (std::filesystem::is_directory(path, ec)) throw IrError(path + ": is a directory, not a graph JSON file");
   std::ifstream in(path);
   if (!in) throw IrError(path + ": cannot open file");
   json j;
@@ -216,6 +219,8 @@ Graph load_graph(const std::string& path) {
     j = json::parse(in);
   } catch (const json::parse_error& e) {
     throw IrError(path + ": invalid JSON: " + e.what());
+  } catch (const std::ios_base::failure& e) {
+    throw IrError(path + ": cannot read file (" + e.what() + ")");
   }
   try {
     return graph_from_json(j);
