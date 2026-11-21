@@ -1309,12 +1309,33 @@ class Linker {
     emit(id(0), std::move(to), EdgeKind::Imports, Confidence::Exact, imp.line, nlohmann::json::object(), std::move(n));
   }
 
-  void call_edge(const CallSite& cs, DefRef target, Confidence c, const char* via = nullptr) {
+  void call_edge(const CallSite& cs, DefRef target, Confidence c, const char* via = nullptr,
+                 const char* narrowed_by = nullptr) {
     const Def& d = p_.def(target);
     if (d.anonymous || (d.kind != DefKind::Function && d.kind != DefKind::Class)) return;
     nlohmann::json attrs = nlohmann::json::object();
     if (via) attrs["via"] = via;
+    if (narrowed_by) attrs["narrowed_by"] = narrowed_by;
     emit(id(cs.attr), p_.id(target), EdgeKind::Calls, c, cs.line, std::move(attrs));
+  }
+
+  // The only two candidates are a class's static and instance member of one name (C.static.m and
+  // C.m): the receiver's form says which. A capitalised name or `this.constructor` is the class
+  // (static); a member access (this.parser) or a lowercase name is an instance. Else no guess.
+  void narrow_static_instance(const CallSite& cs, const std::vector<DefRef>& ms) {
+    const Def& a = p_.def(ms[0]);
+    const Def& b = p_.def(ms[1]);
+    if (ms[0].mod != ms[1].mod || a.parent != b.parent || a.is_static == b.is_static) return;
+    const Expr& recv = cs.callee.sub[0];
+    bool want_static;
+    if (recv.kind == Expr::Kind::Name && !recv.text.empty()) {
+      want_static = std::isupper(static_cast<unsigned char>(recv.text[0])) != 0;
+    } else if (recv.kind == Expr::Kind::Member) {
+      want_static = recv.text == "constructor";
+    } else {
+      return;
+    }
+    call_edge(cs, a.is_static == want_static ? ms[0] : ms[1], Confidence::Inferred, "unique_method_name", "receiver_form");
   }
 
   void method_calls(const CallSite& cs, const Value& obj, const std::string& name) {
@@ -1352,6 +1373,8 @@ class Linker {
         if (!name.starts_with("[") && !name.starts_with("#") && !is_builtin_method(name, cs.callee.sub[0])) {
           if (const auto* ms = p_.methods_named(name); ms && ms->size() == 1) {
             call_edge(cs, ms->front(), Confidence::Inferred, "unique_method_name");
+          } else if (ms && ms->size() == 2) {
+            narrow_static_instance(cs, *ms);
           }
         }
         return;
