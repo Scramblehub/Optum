@@ -84,7 +84,8 @@ id whether n8n, Python or JS calls it.
 
 ```sh
 sh testco/company/setup_glue.sh                                        # import and switch on the n8n flows
-docker compose -f testco/compose.yaml exec company python /driver/business_day.py --orders 20   # a day of trading
+docker compose -f testco/compose.yaml exec driver python /driver/business_day.py --orders 20   # a day of trading
+docker compose -f testco/compose.yaml exec company python nightly_sync.py                    # the company's nightly run
 python3 testco/check_glue.py                                           # every new order: completed, one invoice
 ```
 
@@ -96,3 +97,23 @@ answer key [expected_diagnosis.json](expected_diagnosis.json), checked by a ctes
 nightly script doing the same job (overlapping glue: the same 3 endpoints), and the two copied
 helpers (duplicated logic). The unused cart flow can't be seen from code; that's for the recorded
 traffic.
+
+## Learning the tools' behaviour (`feat/infer-spec`, rough)
+
+```sh
+python3 Core/infer/infer_spec.py testco/recordings --n8n testco/company/n8n -o specs/
+```
+
+From the recordings alone it writes a behaviour spec per tool (`specs/<tool>.spec.json`,
+`specs/spec.md`): its operations (method and endpoint with ids folded to `{}`, or a JSON-RPC model
+and action), how often each is called, by whom, with which statuses; the fields sent and received;
+the resources and their fields; and the status changes seen (shop orders: pending → processing →
+completed). And `observed.json`: findings only traffic shows, so far flows that never ran (the
+abandoned-cart flow: its webhook was never called).
+
+Two things keep the recordings honest:
+- **who called:** the proxy records the calling container (`automation`, `company`, `hooks`,
+  `driver`), so the n8n flow and the nightly script show up separately: both create invoices;
+- **our own tools aren't the company:** loading, the smoke test and the checks send an
+  `X-Optum-Harness` header, recorded as `harness` and left out of the specs; the business driver
+  runs in its own container (`driver`), so its calls are the customers' and Stripe's.
