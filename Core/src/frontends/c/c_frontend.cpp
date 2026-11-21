@@ -110,6 +110,9 @@ struct ModuleInfo {
   std::vector<std::string> forced_includes;  // -include FILE
   // `#define f_c f` where `f_c` is a function defined here: f -> (cond of f_c's definition, cond of the #define).
   std::unordered_map<std::string, std::vector<std::pair<int, int>>> renames;
+  // Definitions of functions the parser lost to error recovery (braces that differ between `#if`
+  // branches), by name: the #if condition of each. Enough to know the function is compiled.
+  std::unordered_map<std::string, std::vector<int>> missed_defs;
   bool in_build = false;    // the file is in the compilation database
   bool external = false;    // read from outside the root (a generated header): defines, no nodes
 };
@@ -174,6 +177,7 @@ class Summarizer {
   void run(TSNode root) {
     m_.pp = c_pp::scan(src_);
     walk(root, -1);
+    find_missed_definitions();
   }
 
  private:
@@ -233,6 +237,55 @@ class Summarizer {
     bool s = false;
     ts::for_named(n, [&](TSNode c) { s = s || (ts::is(c, "storage_class_specifier") && ts::text(c, src_) == "static"); });
     return s;
+  }
+
+  // `#ifndef X / int f(..) { #ifdef P / if(a) { / #else / if(b) { / #endif ... } / #else / int f(..) {..} #endif`:
+  // the real definition has unbalanced braces across branches, the parser drops it, and only the other
+  // branch's `f` is left. A definition that starts a line (type, name, `(`..`)`, then `{`), outside every
+  // function found, of a name that is defined elsewhere in the file: recorded with its #if condition.
+  void find_missed_definitions() {
+    if (m_.funcs.empty()) return;
+    std::unordered_set<std::string> names;
+    std::vector<char> covered;
+    for (const Func& f : m_.funcs) {
+      names.insert(f.name);
+      if (covered.size() <= f.end_line) covered.resize(std::size_t(f.end_line) + 1, 0);
+      for (std::uint32_t l = f.line; l <= f.end_line; ++l) covered[l] = 1;
+    }
+    std::uint32_t line = 0;
+    for (std::size_t i = 0; i < src_.size();) {
+      ++line;
+      std::size_t eol = src_.find('\n', i);
+      if (eol == std::string_view::npos) eol = src_.size();
+      const bool is_covered = line < covered.size() && covered[line];
+      const char c0 = src_[i];
+      if (!is_covered && (std::isalpha(static_cast<unsigned char>(c0)) || c0 == '_')) {
+        const std::size_t paren = src_.find('(', i);
+        if (paren != std::string_view::npos && paren < eol) {
+          std::size_t e = paren;
+          while (e > i && (src_[e - 1] == ' ' || src_[e - 1] == '\t')) --e;
+          std::size_t b = e;
+          while (b > i && (std::isalnum(static_cast<unsigned char>(src_[b - 1])) || src_[b - 1] == '_')) --b;
+          // A type (or `static`...) comes first: the name isn't the line's first word.
+          if (b > i && e > b && names.count(std::string(src_.substr(b, e - b)))) {
+            int depth = 0;
+            std::size_t k = paren;
+            for (; k < src_.size() && k < paren + 4000; ++k) {
+              if (src_[k] == '(') ++depth;
+              else if (src_[k] == ')' && --depth == 0) break;
+            }
+            if (k < src_.size() && depth == 0) {
+              ++k;
+              while (k < src_.size() && std::isspace(static_cast<unsigned char>(src_[k]))) ++k;
+              if (k < src_.size() && src_[k] == '{') {
+                m_.missed_defs[std::string(src_.substr(b, e - b))].push_back(m_.pp.at(line));
+              }
+            }
+          }
+        }
+      }
+      i = eol + 1;
+    }
   }
 
   // An identifier on a directive line (`#ifdef NAME` inside an initializer list, which the parser
@@ -1218,6 +1271,12 @@ class Linker {
     bool compiled = false;
     for (const Func& other : p_.mods[std::size_t(r.mod)].funcs) {
       if (!compiled && other.name == f.name) compiled = cfg_.active(ctx, r.mod, other.cond) != Tri::False;
+    }
+    if (!compiled) {
+      const auto& missed = p_.mods[std::size_t(r.mod)].missed_defs;
+      if (const auto it = missed.find(f.name); it != missed.end()) {
+        for (int c : it->second) compiled = compiled || cfg_.active(ctx, r.mod, c) != Tri::False;
+      }
     }
     // `#if !defined(X) / #define f_c f / #endif` with `int f_c(...) {...}` below: in this configuration
     // the compiled function f_c is named f, whatever a `#if X` branch defines as f.

@@ -579,3 +579,33 @@ TEST_CASE("c: a function defined in several branches of one #if chain is active 
                                       << "\", \"file\": \"lib.c\", \"command\": \"cc -DX=1 -c lib.c\"}]";
   check((dir.path / "cc.json").string());
 }
+
+TEST_CASE("c: a definition the parser loses to unbalanced braces still makes the function compiled") {
+  TempDir dir;
+  // curl's Curl_http_output_auth: the real definition has braces that differ between #if branches,
+  // so only the #else stub is parsed; calls from other files must not look conditional on `!X`.
+  dir.write("lib.c",
+            "#ifndef X\n"
+            "int f(int a,\n"
+            "      int b)\n"
+            "{\n"
+            "#ifdef P\n"
+            "  if(a) {\n"
+            "#else\n"
+            "  if(b) {\n"
+            "#endif\n"
+            "    a++;\n"
+            "  }\n"
+            "  return a;\n"
+            "}\n"
+            "#else\n"
+            "int f(int a,\n"
+            "      int b) { return 0; }\n"
+            "#endif\n");
+  dir.write("main.c", "int f(int a, int b);\nint main(void) { return f(1, 2); }\n");
+  const optum::Graph g = optum::extract_c_files(dir.path, {"lib.c", "main.c"});
+  const optum::Edge* e = find_call(g, "c:main.c#main", "c:lib.c#f");
+  REQUIRE(e);
+  CHECK(e->confidence == optum::Confidence::Exact);
+  CHECK_FALSE(e->attrs.value("inactive", false));
+}
