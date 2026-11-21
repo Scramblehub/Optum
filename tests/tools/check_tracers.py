@@ -4,7 +4,9 @@
     check_tracers.py --work DIR
 
 python_trace.py: calls made in a thread the program starts are recorded; the tracer exits as the
-program does (a string given to sys.exit() is printed and means status 1).
+program does (a string given to sys.exit() is printed and means status 1); `-m MODULE -- args`
+passes every argument on, the first too; a class that sets its own __module__ is named by the file
+it is defined in; each call records the caller's line, and `from_c` when C code made the call.
 js_profile_trace.py: a profiles folder with no .cpuprofile files is an error, not an empty trace.
 """
 import argparse
@@ -17,8 +19,8 @@ import sys
 TRACERS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "Core", "tracers")
 
 
-def run(cmd):
-    return subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60)
+def run(cmd, cwd=None):
+    return subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60, cwd=cwd)
 
 
 def python_trace(work, name, source):
@@ -72,6 +74,48 @@ fail()
 
     r, _ = python_trace(a.work, "exit_code", "import sys\nsys.exit(3)\n")
     assert r.returncode == 3, r.returncode
+
+    # -m: the program gets all its arguments (argv[0] is the module's, replacing the first before).
+    pkg = os.path.join(a.work, "modpkg")
+    os.makedirs(pkg)
+    open(os.path.join(pkg, "__init__.py"), "w").close()
+    with open(os.path.join(pkg, "sentinel.py"), "w") as f:
+        f.write("""\
+import sys
+
+def make_sentinel():
+    class Sentinel:
+        def __init__(self):
+            pass
+    Sentinel.__module__ = sys._getframe(1).f_globals["__name__"]  # as boltons does
+    return Sentinel
+""")
+    with open(os.path.join(pkg, "__main__.py"), "w") as f:
+        f.write("""\
+import sys
+from modpkg.sentinel import make_sentinel
+
+def key(x):
+    return -x
+
+def run():
+    S = make_sentinel()
+    S()
+    sorted([1, 2], key=key)
+
+assert sys.argv[1:] == ["-q", "tests/"], sys.argv
+run()
+""")
+    out = os.path.join(a.work, "modpkg.json")
+    r = run([sys.executable, "-I", os.path.join(TRACERS, "python_trace.py"), "--root", pkg, "-o", out, "-m", "modpkg",
+             "--", "-q", "tests/"], cwd=a.work)
+    assert r.returncode == 0, r.stderr
+    calls = {(c["from"], c["to"]): c for c in json.load(open(out))["calls"]}
+    sent = calls.get(("py:modpkg.__main__.run", "py:modpkg.sentinel.make_sentinel.Sentinel"))
+    assert sent, sorted(calls)  # named by its file, not by the __module__ it set
+    assert sent["lines"] == [9], sent  # the call `S()` in __main__.py
+    assert calls[("py:modpkg.__main__.run", "py:modpkg.__main__.key")].get("from_c"), calls  # sorted() called key
+    assert "from_c" not in calls[("py:modpkg.__main__.run", "py:modpkg.sentinel.make_sentinel")], calls
 
     empty = os.path.join(a.work, "no_profiles")
     os.makedirs(empty)

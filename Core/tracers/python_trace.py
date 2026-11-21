@@ -2,7 +2,9 @@
 """Record which functions call which while a Python program runs, as an Optum trace.
 
     python3 python_trace.py --root DIR -o trace.json -- script.py [args...]
-    python3 python_trace.py --root DIR -o trace.json -m package.module [args...]
+    python3 python_trace.py --root DIR -o trace.json -m package.module [-- args...]
+
+Put `--` before the program's arguments when they start with an option (`-m pytest -- -q tests/`).
 
 Only code under DIR is recorded, with node ids named as Optum's Python frontend names them
 (docs/frontends.md): modules from paths relative to the outermost package around DIR. Then
@@ -16,6 +18,11 @@ expressions, comprehensions and lambdas count as their enclosing function. `Cls(
 a call to the class (Optum's rule), `super().__init__()` as a call to that `__init__`. The class is
 the one actually called, read from the running `__init__`/`__new__`: `Sub()` stays `Sub` when Sub
 inherits its constructor from a base.
+
+Each call also carries `lines` (the caller's line numbers at the call, up to 20 distinct ones) and
+`from_c` (how many of its calls were made by C code calling back into Python, `sorted(key=...)`,
+`list(obj)` -> `__len__`: the caller's frame is the one that called the C function). `optum verify`
+ignores both.
 """
 import argparse
 import bisect
@@ -81,9 +88,20 @@ def main():
         mod = os.path.relpath(f, base)[:-3].replace(os.sep, ".")
         return mod[: -len(".__init__")] if mod.endswith(".__init__") else mod
 
+    def class_file(cls):
+        """The file a class is defined in: where its methods' code lives, not `cls.__module__` (a
+        class can set `__module__` to its user's module, as boltons' make_sentinel does)."""
+        q = getattr(cls, "__qualname__", None)
+        for v in vars(cls).values():
+            fn = v.fget if isinstance(v, property) else getattr(v, "__func__", v)
+            code = getattr(fn, "__code__", None)
+            if code is not None and isinstance(q, str) and code.co_qualname.startswith(q + "."):
+                return code.co_filename
+        return getattr(sys.modules.get(getattr(cls, "__module__", None)), "__file__", None)
+
     def class_id(cls):
         """The node id of a class, or None if it isn't defined under the root."""
-        f = getattr(sys.modules.get(getattr(cls, "__module__", None)), "__file__", None)
+        f = class_file(cls)
         q = getattr(cls, "__qualname__", None)
         if not f or not f.endswith(".py") or not isinstance(q, str):
             return None
@@ -102,7 +120,8 @@ def main():
             return class_id(first)
         return class_id(type(first))
 
-    calls = {}
+    calls = {}  # (caller, callee) -> [count, lines, calls made from C]
+    c_active = threading.local()  # per thread: frames now inside a C function
     instructions = {}  # code object -> (sorted offsets, their opnames)
 
     def is_call_site(code, lasti):
@@ -116,6 +135,17 @@ def main():
         return k >= 0 and names[k].startswith("CALL")
 
     def profile(frame, event, arg):
+        if event == "c_call":
+            try:
+                c_active.stack.append(frame)
+            except AttributeError:
+                c_active.stack = [frame]
+            return
+        if event == "c_return" or event == "c_exception":
+            stack = getattr(c_active, "stack", None)
+            if stack:
+                stack.pop()
+            return
         if event != "call":
             return
         code, back = frame.f_code, frame.f_back
@@ -141,9 +171,15 @@ def main():
                 elif code.co_name == "__init__":
                     callee = callee[: -len(".__init__")]
         if callee != caller:
-            calls[(caller, callee)] = calls.get((caller, callee), 0) + 1
+            rec = calls.setdefault((caller, callee), [0, set(), 0])
+            rec[0] += 1
+            if len(rec[1]) < 20:
+                rec[1].add(back.f_lineno)
+            stack = getattr(c_active, "stack", None)
+            if stack and stack[-1] is back:
+                rec[2] += 1
 
-    sys.argv = target if target else [args.module] + target
+    sys.argv = [args.module] + target if args.module else target
     sys.path.insert(0, os.path.dirname(main_file) if main_file else os.getcwd())
     sys.setprofile(profile)
     threading.setprofile(profile)  # threads the program starts (sys.setprofile covers only this one)
@@ -168,7 +204,8 @@ def main():
         threading.setprofile(None)
         with open(args.out, "w") as f:
             json.dump({"trace_version": "0.1", "source": root, "language": "python",
-                       "calls": [{"from": a, "to": b, "count": n} for (a, b), n in sorted(calls.items())]}, f, indent=1)
+                       "calls": [dict({"from": a, "to": b, "count": n, "lines": sorted(ls)}, **({"from_c": c} if c else {}))
+                                 for (a, b), (n, ls, c) in sorted(calls.items())]}, f, indent=1)
     sys.exit(status)
 
 

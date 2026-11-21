@@ -6,7 +6,7 @@ observed while the code actually ran: how many of them the graph has, and why it
 ```sh
 # Python: run a program (or a test suite) under the tracer
 python3 Core/tracers/python_trace.py --root app/ -o trace.json -- app/main.py --some-flag
-python3 Core/tracers/python_trace.py --root app/ -o trace.json -m pytest tests/
+python3 Core/tracers/python_trace.py --root app/ -o trace.json -m pytest -- tests/
 
 # JavaScript: profile with V8, then convert the profiles using the graph
 node --cpu-prof --cpu-prof-interval 5 --cpu-prof-dir prof/ app/index.js
