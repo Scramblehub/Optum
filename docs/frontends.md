@@ -111,6 +111,8 @@ path from the analysed root, then `#` and the dotted name inside the file.
 | Nested function | `function` | `js:app.js#report.fmt` |
 | Class | `data_type` | `js:shapes.ts#Square` |
 | Method, constructor, class field holding a function | `function` | `js:shapes.ts#Square.area`, `#Square.constructor` |
+| Static method | `function`; its id is `Class.name`, or `Class.static.name` when the class also has an instance member of that name (so `static lex()` and `lex()` stay apart) | `js:marked.js#Lexer.static.lex` |
+| Symbol-keyed method `[kRun]() {}` (key an identifier or `Symbol.x`) | `function` named by the key, brackets kept; `this[kRun]()` calls it. Other computed keys aren't nodes | `js:yargs.js#YargsInstance.[kRun]` |
 | Getter / setter | `function`, `attrs.accessor: "get"` / `"set"` | `js:lib/npm.js#Npm.flatOptions` |
 | npm package | `module`, `attrs.third_party: true` | `js:axios`, `js:@scope/pkg` |
 
@@ -122,9 +124,10 @@ nearest named function, or the module.
 | `import ... from "./x"`, `require("./x")`, `export ... from "./x"`, `import("./x")` | `imports`. Relative specifiers resolve like Node and bundlers: the path, then `.ts .tsx .js .jsx .mjs .cjs`, then `/index.*`; a `.js` specifier may name a `.ts` file. Node builtins (`fs`, `node:path`) give no edge; other bare specifiers are npm packages, unless they name a project path |
 | `f()` | `calls` `f`, through imports, `export`/`module.exports`, re-exports (`export {x} from`, `export * from`) and default imports |
 | `new C()` | `calls` the class node. `super(...)` calls the parent's `constructor` |
+| `Class.m()` | `calls` the static `m` (found through `extends`); `this.m()` inside a static method does too. A class expression's inner name (`var A = class _A { ... new _A() }`) names the class inside its body |
 | `this.m()` | `calls` `m` found through `extends`, plus every override in a subclass (`attrs.via: "override"`). `this` is the class of the nearest method, through arrow functions only |
 | `x.m()` with `x`'s class known | From `new C()` (exact, or `local_type` via a variable), `this.x = new C()`, a class field, a TypeScript annotation (`p: C`, `private repo: C` parameter properties; `attrs.via: "type_annotation"`, plus overrides) |
-| `x.m()` with `x` unknown | `calls` `m` only if exactly one project class defines it and the name isn't a builtin or Node core method (`push`, `then`, `exit`, `readFile`...); `attrs.via: "unique_method_name"` |
+| `x.m()` with `x` unknown | `calls` `m` only if exactly one project class defines it and the name isn't a builtin or Node core method (`push`, `then`, `readFile`...); `attrs.via: "unique_method_name"`. Names only `process` has (`exit`, `cwd`, `nextTick`...) are excluded only when the receiver is `process` (or a field named for it); `process.<anything>()` never links to a project method |
 | `fetch(url, { method })`, `axios.get/post/...(url)`, `node-fetch` | `reads` (GET/HEAD/OPTIONS) or `sends_to` an `http:` node. URLs from literals, template strings and constants, also imported ones |
 | `.query / .execute / .raw / .prepare / .run / .all / .exec` with SQL text | `reads` / `writes` `sql:<table>` nodes, as for Python |
 | Getter and setter access (`npm.flatOptions`) | none: not a call in the source |

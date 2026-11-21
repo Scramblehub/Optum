@@ -63,6 +63,9 @@ struct Def {
   bool arrow = false;      // arrow functions see the outer `this`
   bool anonymous = false;  // callbacks: a scope, but not a node
   std::string accessor;    // "get" / "set" for getters and setters
+  bool is_static = false;  // class members declared `static`: kept apart from instance members of the same name
+  std::string inner_name;  // classes: `var A = class _A {}` binds _A inside the body
+  std::unordered_set<std::string> instance_names;  // classes: names of its non-static members
   std::uint32_t line = 1, end_line = 1;
   std::optional<Expr> base;  // classes: extends
   std::unordered_map<std::string, int> children;
@@ -168,16 +171,24 @@ class Summarizer {
     walk_children(n, s, a);
   }
 
-  int add_def(TSNode n, std::string name, DefKind kind, int parent, bool arrow, bool anonymous = false) {
+  // Static members are keyed "static:name" in `children`, apart from instance members. Their id is
+  // Class.name, unless the class also has an instance member of that name: then Class.static.name.
+  static std::string member_key(const std::string& name, bool is_static) { return is_static ? "static:" + name : name; }
+
+  int add_def(TSNode n, std::string name, DefKind kind, int parent, bool arrow, bool anonymous = false,
+              bool is_static = false) {
+    const std::string key = member_key(name, is_static);
     if (!anonymous) {
-      if (auto it = def(parent).children.find(name); it != def(parent).children.end()) return it->second;
+      if (auto it = def(parent).children.find(key); it != def(parent).children.end()) return it->second;
     }
     Def d;
     // Names are qualified by the nearest named ancestor: callbacks don't appear in ids.
     int named = parent;
     while (named > 0 && def(named).anonymous) named = def(named).parent;
     const std::string& pq = def(named).qual;
-    d.qual = anonymous ? pq : pq.empty() ? name : pq + "." + name;
+    const bool apart = is_static && def(parent).instance_names.count(name);
+    d.qual = anonymous ? pq : pq.empty() ? name : pq + (apart ? ".static." : ".") + name;
+    d.is_static = is_static;
     d.name = std::move(name);
     d.kind = kind;
     d.parent = parent;
@@ -186,7 +197,7 @@ class Summarizer {
     d.line = ts::line(n);
     d.end_line = ts::end_line(n);
     const int idx = static_cast<int>(m_.defs.size());
-    if (!anonymous) def(parent).children.emplace(d.name, idx);
+    if (!anonymous) def(parent).children.emplace(key, idx);
     m_.defs.push_back(std::move(d));
     return idx;
   }
@@ -228,9 +239,9 @@ class Summarizer {
     });
   }
 
-  void on_function(TSNode n, std::string name, int s, bool arrow, int cls = -1) {
+  void on_function(TSNode n, std::string name, int s, bool arrow, int cls = -1, bool is_static = false) {
     if (name.empty()) return on_anonymous(n, s, named_attr(s));
-    const int idx = add_def(n, std::move(name), DefKind::Function, s, arrow);
+    const int idx = add_def(n, std::move(name), DefKind::Function, s, arrow, false, is_static);
     TSNode params = ts::field(n, "parameters");
     if (ts_node_is_null(params)) params = ts::field(n, "parameter");
     bind_params(params, idx, def(idx).name == "constructor", cls);
@@ -251,7 +262,9 @@ class Summarizer {
 
   void on_class(TSNode n, std::string name, int s, int a) {
     if (name.empty()) name = "default";
+    const std::string inner = text(ts::field(n, "name"));  // class expressions: `class _A {}`
     const int idx = add_def(n, std::move(name), DefKind::Class, s, false);
+    if (!inner.empty() && inner != def(idx).name) def(idx).inner_name = inner;
     ts::for_named(n, [&](TSNode c) {
       if (!ts::is(c, "class_heritage")) return;
       ts::for_named(c, [&](TSNode h) {
@@ -261,22 +274,58 @@ class Summarizer {
       walk(c, s, a);
     });
     const TSNode body = ts::field(n, "body");
+    if (ts_node_is_null(body)) return;
+    ts::for_named(body, [&](TSNode m) {
+      if (!ts::is(m, "method_definition") && !ts::is(m, "public_field_definition") && !ts::is(m, "field_definition")) return;
+      if (is_static_member(m)) return;
+      const std::string nm = member_name(m);
+      if (!nm.empty()) def(idx).instance_names.insert(nm);
+    });
     // Field initializers run at construction but read like class-body code: they count for `a`.
-    if (!ts_node_is_null(body)) walk_children(body, idx, a);
+    walk_children(body, idx, a);
+  }
+
+  static bool is_static_member(TSNode m) {
+    TSNode name = ts::field(m, "name");
+    if (ts_node_is_null(name)) name = ts::field(m, "property");
+    const uint32_t count = ts_node_child_count(m);
+    for (uint32_t i = 0; i < count; ++i) {
+      const TSNode c = ts_node_child(m, i);
+      if (ts_node_eq(c, name)) break;
+      if (ts::is(c, "static")) return true;
+    }
+    return false;
+  }
+
+  // The member's name as used in ids. A computed key `[kX]` that is an identifier (or Symbol.x)
+  // names the member by that constant, brackets kept: `[kX]`. Other computed keys: "".
+  std::string member_name(TSNode m) {
+    TSNode name = ts::field(m, "name");
+    if (ts_node_is_null(name)) name = ts::field(m, "property");
+    if (ts_node_is_null(name)) return "";
+    if (ts::is(name, "computed_property_name")) {
+      const TSNode inner = ts_node_named_child(name, 0);
+      if (ts_node_named_child_count(name) == 1 && (ts::is(inner, "identifier") || ts::is(inner, "member_expression"))) {
+        return "[" + text(inner) + "]";
+      }
+      return "";
+    }
+    std::string nm = text(name);
+    if (ts::is(name, "string") && nm.size() >= 2) nm = nm.substr(1, nm.size() - 2);
+    return nm;
   }
 
   void on_method(TSNode n, int cls) {
-    const TSNode name = ts::field(n, "name");
-    if (ts::is(name, "computed_property_name")) return;
-    std::string nm = text(name);
-    if (ts::is(name, "string") && nm.size() >= 2) nm = nm.substr(1, nm.size() - 2);
+    const std::string nm = member_name(n);
+    if (nm.empty()) return;  // other computed keys: not nodes
     // Object literal methods ({ get() {...} }) aren't nodes yet: a scope, like a callback.
     if (def(cls).kind != DefKind::Class) return on_anonymous(n, cls, named_attr(cls));
-    on_function(n, nm, cls, false, cls);
+    const bool is_static = is_static_member(n);
+    on_function(n, nm, cls, false, cls, is_static);
     const uint32_t count = ts_node_child_count(n);
     for (uint32_t i = 0; i < count; ++i) {
       const std::string_view ct = ts_node_type(ts_node_child(n, i));
-      if (ct == "get" || ct == "set") def(def(cls).children.at(nm)).accessor = std::string(ct);
+      if (ct == "get" || ct == "set") def(def(cls).children.at(member_key(nm, is_static))).accessor = std::string(ct);
     }
   }
 
@@ -287,7 +336,7 @@ class Summarizer {
     if (ts_node_is_null(name) || ts::is(name, "computed_property_name")) return;
     const std::string nm = text(name);
     if (ts::is(value, "arrow_function") || ts::is(value, "function_expression")) {
-      return on_function(value, nm, cls, ts::is(value, "arrow_function"));
+      return on_function(value, nm, cls, ts::is(value, "arrow_function"), -1, is_static_member(n));
     }
     if (def(cls).kind == DefKind::Class) {
       std::optional<Expr> type = type_ref(ts::field(n, "type"));
@@ -631,6 +680,14 @@ class Summarizer {
       e.kind = Expr::Kind::Member;
       e.text = text(ts::field(n, "property"));
       e.sub.push_back(to_expr(ts::field(n, "object")));
+    } else if (t == "subscript_expression") {
+      // this[kX](): a computed member named by an identifier, matched with `[kX]() {}` methods.
+      const TSNode index = ts::field(n, "index");
+      if (ts::is(index, "identifier")) {
+        e.kind = Expr::Kind::Member;
+        e.text = "[" + text(index) + "]";
+        e.sub.push_back(to_expr(ts::field(n, "object")));
+      }
     } else if (t == "binary_expression") {
       const std::string op = text(ts::field(n, "operator"));
       if (op == "||" || op == "??") {
@@ -712,10 +769,28 @@ const std::unordered_set<std::string_view>& node_builtins() {
   return names;
 }
 
-bool is_builtin_method(const std::string& name) {
+// Does the receiver look like Node's `process` (the name, or a field named for it: this.#process)?
+bool is_process_receiver(const Expr& recv) {
+  auto lower = [](std::string t) {
+    for (char& c : t) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return t;
+  };
+  if (recv.kind != Expr::Kind::Name && recv.kind != Expr::Kind::Member) return false;
+  const std::string t = lower(recv.text);
+  return t == "process" || t == "#process" || t == "_process" || t == "globalthis" || t == "global";
+}
+
+// Is `name` a Node builtin's method (so `x.name()` on an unknown x is probably not a project call)?
+// Names that only Node's `process` has (exit, cwd, ...) count only when the receiver looks like it:
+// `yargs.exit(1)` may be a project method.
+bool is_builtin_method(const std::string& name, const Expr& receiver) {
   static const std::unordered_set<std::string_view> names = {
 #include "builtin_methods.inc"
   };
+  static const std::unordered_set<std::string_view> process_only = {"exit", "cwd", "chdir", "umask", "uptime", "hrtime",
+                                                                    "nextTick", "abort", "emitWarning"};
+  if (is_process_receiver(receiver)) return true;  // process.anything() is never a project method
+  if (process_only.count(name)) return false;
   return names.count(name) > 0;
 }
 
@@ -730,6 +805,8 @@ struct Value {
   // (Def), or instances of those classes (Instance). `ref` is the first of them.
   bool guess = false;
   std::vector<DefRef> alts;
+  // This (and Super) inside a static method, and a class itself: the class's static members.
+  bool statics = false;
 };
 
 struct NameHit {
@@ -754,7 +831,8 @@ class Project {
       const auto& defs = mods[std::size_t(m)].defs;
       for (int d = 1; d < static_cast<int>(defs.size()); ++d) {
         const Def& df = defs[std::size_t(d)];
-        if (df.kind == DefKind::Function && !df.anonymous && defs[std::size_t(df.parent)].kind == DefKind::Class) {
+        if (df.kind == DefKind::Function && !df.anonymous && !df.is_static &&
+            defs[std::size_t(df.parent)].kind == DefKind::Class) {
           methods_by_name_[df.name].push_back({m, d});
         }
       }
@@ -874,7 +952,10 @@ class Project {
     const auto& defs = mods[std::size_t(m)].defs;
     for (int s = scope; s >= 0; s = defs[std::size_t(s)].parent) {
       const Def& d = defs[std::size_t(s)];
-      if (d.kind == DefKind::Class) continue;
+      if (d.kind == DefKind::Class) {  // `var A = class _A {}`: _A names the class inside its body
+        if (!d.inner_name.empty() && d.inner_name == name) return {NameHit::Kind::Value, def_value({m, s}), s};
+        continue;
+      }
       if (auto it = d.children.find(name); it != d.children.end()) {
         return {NameHit::Kind::Value, def_value({m, it->second}), s};
       }
@@ -898,6 +979,18 @@ class Project {
     return std::nullopt;
   }
 
+  // Is `this` in scope s that of a static method (so it is the class itself)?
+  bool in_static(int m, int s) const {
+    const auto& defs = mods[std::size_t(m)].defs;
+    while (s > 0 && defs[std::size_t(s)].kind == DefKind::Function) {
+      const int p = defs[std::size_t(s)].parent;
+      if (defs[std::size_t(p)].kind == DefKind::Class) return defs[std::size_t(s)].is_static;
+      if (!defs[std::size_t(s)].arrow) return false;
+      s = p;
+    }
+    return false;
+  }
+
   Value resolve_expr(int m, int scope, const Expr& e, int depth) const {
     if (depth > 10) return {};
     switch (e.kind) {
@@ -910,10 +1003,10 @@ class Project {
         return {};
       }
       case Expr::Kind::This:
-        if (auto cls = this_class(m, scope)) return {Value::Kind::This, *cls, {}, false, {}};
+        if (auto cls = this_class(m, scope)) return {Value::Kind::This, *cls, {}, false, {}, in_static(m, scope)};
         return {};
       case Expr::Kind::Super:
-        if (auto cls = this_class(m, scope)) return {Value::Kind::Super, *cls, {}, false, {}};
+        if (auto cls = this_class(m, scope)) return {Value::Kind::Super, *cls, {}, false, {}, in_static(m, scope)};
         return {};
       case Expr::Kind::Member:
         return member_of(resolve_expr(m, scope, e.sub[0], depth + 1), e.text, depth);
@@ -1021,11 +1114,12 @@ class Project {
       case Value::Kind::This:
       case Value::Kind::Declared:
         if (name == "constructor" && obj.kind != Value::Kind::Def) return def_value(obj.ref);  // this.constructor.m()
-        if (auto mth = lookup_method(obj.ref, name)) return def_value(*mth);
+        if (auto mth = lookup_method(obj.ref, name, 0, obj.kind == Value::Kind::Def || obj.statics)) return def_value(*mth);
+        if (obj.kind == Value::Kind::Def || obj.statics) return {};
         return lookup_attr(obj.ref, name, depth + 1);
       case Value::Kind::Super:
         if (auto b = base_of(obj.ref)) {
-          if (auto mth = lookup_method(*b, name)) return def_value(*mth);
+          if (auto mth = lookup_method(*b, name, 0, obj.statics)) return def_value(*mth);
         }
         return {};
       case Value::Kind::ThirdParty:
@@ -1035,11 +1129,12 @@ class Project {
     }
   }
 
-  std::optional<DefRef> lookup_method(DefRef cls, const std::string& name, int depth = 0) const {
+  // statics: look among the class's static members (`C.make()`), not its instance members.
+  std::optional<DefRef> lookup_method(DefRef cls, const std::string& name, int depth = 0, bool statics = false) const {
     if (depth > 32) return std::nullopt;
     const Def& c = def(cls);
-    if (auto it = c.children.find(name); it != c.children.end()) return DefRef{cls.mod, it->second};
-    if (auto b = base_of(cls)) return lookup_method(*b, name, depth + 1);
+    if (auto it = c.children.find(statics ? "static:" + name : name); it != c.children.end()) return DefRef{cls.mod, it->second};
+    if (auto b = base_of(cls)) return lookup_method(*b, name, depth + 1, statics);
     return std::nullopt;
   }
 
@@ -1236,14 +1331,14 @@ class Linker {
       case Value::Kind::This:
       case Value::Kind::Declared: {
         const bool declared = obj.kind == Value::Kind::Declared;
-        if (auto mth = p_.lookup_method(obj.ref, name)) {
+        if (auto mth = p_.lookup_method(obj.ref, name, 0, obj.statics)) {
           call_edge(cs, *mth, declared ? Confidence::Inferred : Confidence::Exact, declared ? "type_annotation" : nullptr);
-        } else if (const Value attr = p_.lookup_attr(obj.ref, name, 0); attr.kind == Value::Kind::Def) {
+        } else if (const Value attr = p_.lookup_attr(obj.ref, name, 0); !obj.statics && attr.kind == Value::Kind::Def) {
           call_edge(cs, attr.ref, Confidence::Inferred, "local_type");
         }
         for (const DefRef& sub : p_.descendants(obj.ref)) {
           const Def& sd = p_.def(sub);
-          if (auto it = sd.children.find(name); it != sd.children.end()) {
+          if (auto it = sd.children.find(obj.statics ? "static:" + name : name); it != sd.children.end()) {
             call_edge(cs, {sub.mod, it->second}, Confidence::Inferred, "override");
           }
         }
@@ -1263,7 +1358,7 @@ class Linker {
         }
         return;
       case Value::Kind::Unknown:
-        if (!name.starts_with("#") && !is_builtin_method(name)) {
+        if (!name.starts_with("[") && !name.starts_with("#") && !is_builtin_method(name, cs.callee.sub[0])) {
           if (const auto* ms = p_.methods_named(name); ms && ms->size() == 1) {
             call_edge(cs, ms->front(), Confidence::Inferred, "unique_method_name");
           }
@@ -1520,7 +1615,8 @@ Graph extract_js_files(const fs::path& root, const std::vector<fs::path>& rel_fi
         // (top level), inside a function, or a #private member.
         const bool override_of_outside = m.defs[std::size_t(df.parent)].kind == DefKind::Class &&
                                          project.has_outside_base({static_cast<int>(mi), df.parent});
-        if (override_of_outside || frontends::name_used(uses, df.name)) n.attrs["referenced"] = true;
+        // `[kX]() {}`: the key constant appears at every use of the symbol, and in the definition itself.
+        if (override_of_outside || df.name.starts_with("[") || frontends::name_used(uses, df.name)) n.attrs["referenced"] = true;
         else if (frontends::name_used(test_uses, df.name)) n.attrs["referenced_by_tests"] = true;
         const Def& parent = m.defs[std::size_t(df.parent)];
         bool exported = false;
