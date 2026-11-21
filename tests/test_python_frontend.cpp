@@ -101,3 +101,176 @@ TEST_CASE("python: URLs from configuration defaults and string concatenation") {
   REQUIRE(e.count("sends_to py:sync.c -> http:crm.example.com/deals/{}") == 1);  // unknown right side: a hole
   for (const auto& edge : e) REQUIRE(edge.find("py:sync.d ->") == std::string::npos);  // no default: unknown
 }
+
+TEST_CASE("python: a subscripted base is followed; Generic[...] and Protocol[...] are not bases") {
+  Project p;
+  p.write("m.py",
+          "from typing import Generic, TypeVar, Protocol\n"
+          "T = TypeVar('T')\n"
+          "class Base(Generic[T]):\n"
+          "    def fail(self):\n"
+          "        pass\n"
+          "    def __init__(self):\n"
+          "        pass\n"
+          "class Child(Base[int]):\n"
+          "    def __init__(self):\n"
+          "        super().__init__()\n"
+          "    def go(self):\n"
+          "        self.fail()\n"
+          "class P(Protocol[T]):\n"
+          "    def run(self):\n"
+          "        pass\n");
+  const auto e = p.edges();
+  REQUIRE(e.count("calls py:m.Child.go -> py:m.Base.fail") == 1);
+  REQUIRE(e.count("calls py:m.Child.__init__ -> py:m.Base.__init__") == 1);
+}
+
+TEST_CASE("python: cls(...), type(self)(...) and self.__class__(...) build the enclosing class") {
+  Project p;
+  p.write("m.py",
+          "class Bits:\n"
+          "    def __init__(self, v):\n"
+          "        self.v = v\n"
+          "    @classmethod\n"
+          "    def from_bin(cls, s):\n"
+          "        return cls(int(s, 2))\n"
+          "    def copy(self):\n"
+          "        return type(self)(self.v)\n"
+          "    def clone(self):\n"
+          "        return self.__class__(self.v)\n"
+          "    def __call__(self):\n"
+          "        pass\n"
+          "    def again(self):\n"
+          "        self()\n");
+  const auto e = p.edges();
+  REQUIRE(e.count("calls py:m.Bits.from_bin -> py:m.Bits") == 1);
+  REQUIRE(e.count("calls py:m.Bits.copy -> py:m.Bits") == 1);
+  REQUIRE(e.count("calls py:m.Bits.clone -> py:m.Bits") == 1);
+  REQUIRE(e.count("calls py:m.Bits.again -> py:m.Bits.__call__") == 1);  // self(...) is not a constructor call
+  REQUIRE(e.count("calls py:m.Bits.again -> py:m.Bits") == 0);
+}
+
+TEST_CASE("python: obj(...) calls __call__ when obj's class is known") {
+  Project p;
+  p.write("v.py",
+          "class Check:\n"
+          "    def __call__(self, x):\n"
+          "        pass\n"
+          "def make():\n"
+          "    return Check()\n"
+          "class Field:\n"
+          "    def __init__(self):\n"
+          "        self.check = Check()\n"
+          "    def run(self, x):\n"
+          "        self.check(x)\n"
+          "def local(x):\n"
+          "    c = Check()\n"
+          "    c(x)\n"
+          "def returned(x):\n"
+          "    c = make()\n"
+          "    c(x)\n"
+          "def unknown(c, x):\n"
+          "    c(x)\n");
+  const auto e = p.edges();
+  REQUIRE(e.count("calls py:v.Field.run -> py:v.Check.__call__") == 1);
+  REQUIRE(e.count("calls py:v.local -> py:v.Check.__call__") == 1);
+  REQUIRE(e.count("calls py:v.returned -> py:v.Check.__call__") == 1);
+  REQUIRE(e.count("calls py:v.unknown -> py:v.Check.__call__") == 0);
+}
+
+TEST_CASE("python: a parameter's default is added to what callers pass, not replaced by it") {
+  Project p;
+  p.write("m.py",
+          "def d1(x):\n"
+          "    pass\n"
+          "def inner(x):\n"
+          "    pass\n"
+          "def run(enter=d1):\n"
+          "    enter(1)\n"
+          "run(enter=inner)\n"
+          "def solo(f=d1):\n"
+          "    f(1)\n");
+  const auto e = p.edges();
+  REQUIRE(e.count("calls py:m.run -> py:m.inner") == 1);
+  REQUIRE(e.count("calls py:m.run -> py:m.d1") == 1);
+  REQUIRE(e.count("calls py:m.solo -> py:m.d1") == 1);  // no caller passes one: the default alone
+}
+
+TEST_CASE("python: a method name is not guessed for a call on an imported standard-library module") {
+  Project p;
+  p.write("m.py",
+          "import os\n"
+          "import re as regex\n"
+          "from os import path\n"
+          "class Lazy:\n"
+          "    def open(self):\n"
+          "        pass\n"
+          "    def sub(self):\n"
+          "        pass\n"
+          "    def join(self):\n"
+          "        pass\n"
+          "def go(x):\n"
+          "    os.open('f', 0)\n"
+          "    regex.sub('a', 'b', x)\n"
+          "    path.join('a')\n"
+          "    x.open()\n");  // an unknown receiver still gets the unique-name guess
+  const auto e = p.edges();
+  REQUIRE(e.count("calls py:m.go -> py:m.Lazy.open") == 1);  // from x.open() only
+  REQUIRE(e.count("calls py:m.go -> py:m.Lazy.sub") == 0);
+  REQUIRE(e.count("calls py:m.go -> py:m.Lazy.join") == 0);
+}
+
+TEST_CASE("python: a property's getter is called when it is read, and what it returns is still guessed by unique name") {
+  Project p;
+  p.write("sql.py",
+          "import copy\n"
+          "class Query:\n"
+          "    def add_ordering(self, *f):\n"
+          "        pass\n"
+          "    def set_empty(self):\n"
+          "        pass\n"
+          "    def chain(self):\n"
+          "        return Query()\n");
+  p.write("qs.py",
+          "import copy\n"
+          "import functools\n"
+          "from sql import Query\n"
+          "class QS:\n"
+          "    def __init__(self, query=None):\n"
+          "        self._query = query or Query()\n"
+          "    @property\n"
+          "    def query(self):\n"
+          "        return self._query\n"
+          "    @property\n"
+          "    def func(self):\n"
+          "        return Query\n"
+          "    def _clone(self):\n"
+          "        c = self.__class__(query=self.query.chain())\n"
+          "        return c\n"
+          "    def order(self, *fields):\n"
+          "        clone = self._clone()\n"
+          "        clone.query.add_ordering(*fields)\n"
+          "        return clone\n"
+          "    def none(self):\n"
+          "        self.query.set_empty()\n"
+          "    def named_like_a_module(self):\n"
+          "        copy = self._clone()\n"
+          "        copy.query.add_ordering()\n"
+          "    def build(self, f, terms):\n"
+          "        f.func(*terms)\n");
+  const auto e = p.edges();
+  auto has = [&](const std::string& from, const std::string& to) {
+    for (const auto& edge : e) {
+      if (edge.starts_with("calls " + from + " -> " + to)) return true;
+    }
+    return false;
+  };
+  REQUIRE(has("py:qs.QS.order", "py:sql.Query.add_ordering"));
+  REQUIRE(has("py:qs.QS.named_like_a_module", "py:sql.Query.add_ordering"));
+  REQUIRE(has("py:qs.QS.none", "py:sql.Query.set_empty"));
+  // The getter runs when the property is read, so the caller calls it (and what it returns is unknown).
+  REQUIRE(e.count("calls py:qs.QS.none -> py:qs.QS.query") == 1);
+  REQUIRE(e.count("calls py:qs.QS.order -> py:qs.QS.query") == 1);
+  REQUIRE(has("py:qs.QS.build", "py:qs.QS.func") == false);  // f is unknown: nothing says func is the property
+  REQUIRE(e.count("calls py:qs.QS.build -> py:qs.QS.func") == 0);
+}

@@ -61,9 +61,12 @@ Ids are `py:` followed by the dotted path from the analysed root.
 | Import of a third-party package | `imports` to its `py:<package>` node |
 | `f()` | `calls` to `f`, followed through imports and re-exports to where it's defined |
 | `Cls()` | `calls` to the class node (`data_type`). Not to `__init__` |
+| `cls(...)` in a `@classmethod` or `__new__`; `type(self)(...)`, `self.__class__(...)` | `calls` to the enclosing class (a subclass may run instead). `confidence: inferred`, `attrs.via: "class_var"` |
+| `obj(...)` with `obj`'s class known | `calls` to its `__call__`. `confidence: inferred`, `attrs.via: "call_dunder"` |
+| Class bases | `class C(Base[int])` follows `Base`; `Generic[...]` and `Protocol[...]` name no class |
 | `self.m()`, `obj.m()` | `calls` to `m` on the object's class, found through inheritance; for `self` also every override in a subclass (`attrs.via: "override"`) |
 | How an object's class is known | `self`; `x = Cls()` in the same scope; `self.x = Cls()` in any method of the class; `Cls().m()` directly. Edges found through `x = Cls()` or `self.x = Cls()` are `confidence: inferred`, `attrs.via: "local_type"` |
-| `x.m()` with `x` unknown | `calls` to `m` only if exactly one project class defines `m`, and `m` isn't a dunder or a method name of a builtin type (`get`, `append`, `startswith`...). `confidence: inferred`, `attrs.via: "unique_method_name"` |
+| `x.m()` with `x` unknown | `calls` to `m` only if exactly one project class defines `m`, and `m` isn't a dunder or a method name of a builtin type (`get`, `append`, `startswith`...). Not when the receiver is an imported standard-library module (`os.open`, `re.sub`). `confidence: inferred`, `attrs.via: "unique_method_name"` |
 | `super().m()` | `calls` to the parent's `m` |
 | Decorator `@d(arg)` on a function | the decorated scope `calls` `d`, and also the function `d` returns (`attrs.via: "return_value"`) |
 | A class body's own statements (`PATTERN = re.compile(...)`, decorators on methods) | `calls` from the class node: the class body is a scope of its own, as at runtime. Its names resolve in the class body first |
@@ -73,7 +76,7 @@ also known through:
 
 | `attrs.via` | How | Example |
 |---|---|---|
-| `param_default` | a parameter never reassigned is taken to be its default | `def urlencode(q, quote_via=quote_plus): quote_via(k)` |
+| `param_default` | a parameter never reassigned is taken to be its default (added to what call sites pass, when a call site passes a function or class) | `def urlencode(q, quote_via=quote_plus): quote_via(k)` |
 | `argument` | what call sites pass to a parameter: a function or class (every one passed, up to 8), or instances of a class (when all call sites agree). Followed through up to 3 calls | `apply(shout, x)` makes `fn(text)` in `apply` call `shout` |
 | `return_value` | what a function returns: a nested function, a class, or an instance | `get = self._formatter(a); get(1)`; `x = make_client(); x.send()` |
 | `attr_value` | `self.x()` where `self.x` holds a function or class (`self.x = f`, or a class attribute `x = Cls`) | `self._address_class(n)` |
