@@ -596,7 +596,11 @@ class Project {
     for (int m = 0; m < static_cast<int>(mods.size()); ++m) {
       for (int f = 0; f < static_cast<int>(mods[std::size_t(m)].funcs.size()); ++f) {
         const Func& fn = mods[std::size_t(m)].funcs[std::size_t(f)];
-        if (!fn.is_static && !mods[std::size_t(m)].external) globals_[fn.name].push_back({m, f});
+        if (fn.is_static || mods[std::size_t(m)].external) continue;
+        // `#if X / f() {..} / #else / f() {..} / #endif`: one function, whichever branch is compiled.
+        auto& defs = globals_[fn.name];
+        const bool again = std::any_of(defs.begin(), defs.end(), [&](const FnRef& r) { return r.mod == m; });
+        if (!again) defs.push_back({m, f});
       }
     }
     for (const ModuleInfo& mod : mods) {
@@ -613,6 +617,21 @@ class Project {
       }
     }
     visible_.resize(mods.size());
+    // A file in the build sees its headers' includes the way its own flags find them: a header
+    // included from two files with different -I dirs reaches different files (a generated config.h).
+    std::map<std::pair<int, std::string>, std::vector<int>> in_context;  // (header, dirs) -> its includes
+    auto includes_in = [&](int h, const ModuleInfo& tu) -> const std::vector<int>& {
+      if (tu.inc_dirs.empty()) return includes_[std::size_t(h)];
+      std::string sig;
+      for (const auto& d : tu.inc_dirs) sig += d.path + (d.quote_only ? "?q\n" : "\n");
+      auto [it, fresh] = in_context.try_emplace({h, sig});
+      if (fresh) {
+        for (const Include& inc : mods[std::size_t(h)].includes) {
+          if (const int k = resolve_include(h, inc, &tu.inc_dirs); k >= 0 && k != h) it->second.push_back(k);
+        }
+      }
+      return it->second;
+    };
     for (int m = 0; m < static_cast<int>(mods.size()); ++m) {
       std::vector<int> todo = includes_[std::size_t(m)];
       std::unordered_set<int> seen{m};
@@ -621,7 +640,7 @@ class Project {
         todo.pop_back();
         if (!seen.insert(h).second) continue;
         visible_[std::size_t(m)].push_back(h);
-        for (int k : includes_[std::size_t(h)]) todo.push_back(k);
+        for (int k : includes_in(h, mods[std::size_t(m)])) todo.push_back(k);
       }
     }
     // Functions whose address is taken: statics only where named, others anywhere.
@@ -648,13 +667,13 @@ class Project {
   // conventional include roots. <system> headers never match by file name alone: a vendored
   // deps/x/assert.h must not stand in for libc's. As a last resort a "quoted" include matches a
   // unique file by its trailing path, but only inside the includer's own tree (not a vendored one).
-  int resolve_include(int from, const Include& inc) const {
+  int resolve_include(int from, const Include& inc, const std::vector<ModuleInfo::IncDir>* tu_dirs = nullptr) const {
     const ModuleInfo& m = mods[std::size_t(from)];
     if (fs::path(inc.spec).is_absolute()) return lookup(fs::path(inc.spec));
     if (!inc.system) {
       if (const int h = lookup(fs::path(m.path).parent_path() / inc.spec); h >= 0) return h;
     }
-    const auto& dirs = m.inc_dirs.empty() ? global_dirs_ : m.inc_dirs;
+    const auto& dirs = tu_dirs ? *tu_dirs : m.inc_dirs.empty() ? global_dirs_ : m.inc_dirs;
     for (const ModuleInfo::IncDir& d : dirs) {
       if (inc.system && d.quote_only) continue;
       if (const int h = lookup(fs::path(d.path) / inc.spec); h >= 0) return h;
@@ -690,6 +709,9 @@ class Project {
   // The module at a path (absolute, or relative to the root), -1 if it isn't one.
   int lookup(const fs::path& p) const {
     std::string key = p.lexically_normal().generic_string();
+    if (p.is_absolute()) {
+      if (const auto it = by_path_.find(key); it != by_path_.end()) return it->second;
+    }
     if (p.is_absolute() && key.size() > root_abs_.size() && key.starts_with(root_abs_) && key[root_abs_.size()] == '/') {
       key = key.substr(root_abs_.size() + 1);
     }
@@ -1540,8 +1562,9 @@ Graph extract_c_files(const fs::path& root, const std::vector<fs::path>& rel_fil
       const std::vector<Include> includes = project.mods[i].includes;
       const std::vector<ModuleInfo::IncDir> dirs =
           project.mods[i].inc_dirs.empty() ? project.global_dirs_ : project.mods[i].inc_dirs;
+      const bool shared = project.mods[i].inc_dirs.empty();  // a header: any file's flags may reach it
       for (const Include& inc : includes) {
-        if (project.resolve_include(static_cast<int>(i), inc) >= 0) continue;
+        if (!shared && project.resolve_include(static_cast<int>(i), inc) >= 0) continue;
         std::vector<fs::path> cands;
         if (fs::path(inc.spec).is_absolute()) cands.push_back(inc.spec);
         else {
@@ -1554,7 +1577,10 @@ Graph extract_c_files(const fs::path& root, const std::vector<fs::path>& rel_fil
           const std::string key = c.lexically_normal().generic_string();
           std::error_code ec;
           if (!c.is_absolute() || !fs::is_regular_file(c, ec)) continue;
-          if (project.lookup(c) >= 0) break;  // inside the root: already a module
+          if (project.lookup(c) >= 0) {  // already a module (inside the root, or loaded)
+            if (shared) continue;
+            break;
+          }
           ModuleInfo ext;
           ext.path = key;
           ext.external = true;
@@ -1564,7 +1590,7 @@ Graph extract_c_files(const fs::path& root, const std::vector<fs::path>& rel_fil
           ext.funcs.clear();
           ext.calls.clear();
           project.add_module(std::move(ext));
-          break;
+          if (!shared) break;
         }
       }
     }

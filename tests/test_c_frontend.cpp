@@ -456,3 +456,80 @@ TEST_CASE("c: --compile-commands gives -D, -I (even outside the root) and the fi
   CHECK_FALSE(edge(h, "c:lib/other.c#dup_fn"));  // two definitions: ambiguous without the file list
   fs::remove_all(gen);
 }
+
+TEST_CASE("c: a callee defined in both branches of an #if/#else is one function, linked from other files") {
+  TempDir dir;
+  dir.write("lib/cfg.h", "#define ONE 1\n");
+  dir.write("lib/lib.c",
+            "#include \"cfg.h\"\n"
+            "#ifdef TWO\n"
+            "int callee(int x) { return 2; }\n"
+            "#else\n"
+            "int callee(int x) { return 1; }\n"
+            "#endif\n");
+  dir.write("app/main.c", "int callee(int x);\nint main(void) { return callee(1); }\n");
+  const optum::Graph g = optum::extract_c_files(dir.path, {"lib/cfg.h", "lib/lib.c", "app/main.c"});
+  const optum::Edge* e = find_call(g, "c:app/main.c#main", "c:lib/lib.c#callee");
+  REQUIRE(e);
+  CHECK(e->confidence == optum::Confidence::Exact);  // the #else definition is the compiled one
+  CHECK_FALSE(e->attrs.value("inactive", false));
+}
+
+TEST_CASE("c: a macro from a generated header found through -I counts, directly and through another header") {
+  TempDir dir;
+  dir.write("build/config.h", "#define X 1\n#define LEVEL 3\n");
+  dir.write("inc/config.h", "/* another build's config: defines nothing */\n");  // first in the database
+  dir.write("src/other.c", "#include \"config.h\"\nvoid other(void) {}\n");
+  dir.write("src/h.h", "#include \"config.h\"\n");
+  dir.write("src/sub/a.c",
+            "#include \"config.h\"\n"
+            "void direct(void) {}\n"
+            "void off(void) {}\n"
+            "void run(void) {\n"
+            "#ifdef X\n"
+            "  direct();\n"
+            "#endif\n"
+            "#if LEVEL > 2\n"
+            "  direct();\n"
+            "#endif\n"
+            "#ifndef X\n"
+            "  off();\n"  // X is defined by config.h: this is off for certain
+            "#endif\n"
+            "}\n");
+  dir.write("src/sub/b.c",
+            "#include \"../h.h\"\n"
+            "void via(void) {}\n"
+            "void run2(void) {\n"
+            "#ifdef X\n"
+            "  via();\n"
+            "#endif\n"
+            "}\n");
+  dir.write("src/c.c",
+            "#include <config.h>\n"
+            "void angle(void) {}\n"
+            "void run3(void) {\n"
+            "#ifdef X\n"
+            "  angle();\n"
+            "#endif\n"
+            "}\n");
+  const std::string root = dir.path.generic_string();
+  std::ofstream(dir.path / "cc.json")
+      << "[{\"directory\": \"" << root << "\", \"file\": \"src/other.c\", \"command\": \"cc -I" << root
+      << "/inc -c src/other.c\"}, {\"directory\": \"" << root << "\", \"file\": \"src/sub/a.c\", \"command\": \"cc -I" << root
+      << "/build -c src/sub/a.c\"}, {\"directory\": \"" << root << "\", \"file\": \"src/sub/b.c\", \"command\": \"cc -I"
+      << root << "/build -c src/sub/b.c\"}, {\"directory\": \"" << root
+      << "\", \"file\": \"src/c.c\", \"command\": \"cc -isystem " << root << "/build -c src/c.c\"}]";
+  const optum::Graph g = optum::extract_c_files(dir.path, {"inc/config.h", "src/other.c", "src/h.h", "src/sub/a.c", "src/sub/b.c", "src/c.c"}, nullptr, 0,
+                                                (dir.path / "cc.json").string());
+  for (auto [from, to] : {std::pair{"c:src/sub/a.c#run", "c:src/sub/a.c#direct"},
+                          std::pair{"c:src/sub/b.c#run2", "c:src/sub/b.c#via"},
+                          std::pair{"c:src/c.c#run3", "c:src/c.c#angle"}}) {
+    const optum::Edge* e = find_call(g, from, to);
+    REQUIRE(e);
+    CHECK(e->confidence == optum::Confidence::Exact);
+    CHECK_FALSE(e->attrs.value("inactive", false));
+  }
+  const optum::Edge* off = find_call(g, "c:src/sub/a.c#run", "c:src/sub/a.c#off");
+  REQUIRE(off);
+  CHECK(off->attrs.value("inactive", false));  // the definition of X was seen, so this is certain
+}
