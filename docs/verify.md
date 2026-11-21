@@ -44,6 +44,14 @@ Ids are the graph's node ids. Self-calls are ignored, and repeated pairs count o
 | Constructors | `Cls()` → the class actually called (read from the running `__init__`/`__new__`, so `Sub()` stays `Sub` when it inherits its constructor); `super().__init__()` → that `__init__` | a constructor frame → its class, unless the graph has an explicit `super(...)` call |
 | Ids | as the Python frontend names them, `@def` included | from the graph, by file and line |
 
+The JavaScript tracer sets aside **skip-level artifacts**: a sampled profile sometimes shows A
+calling C although the code is A -> B -> C (B was inlined, or its frame missed). A call A -> C is
+set aside when its total count is at most 5, every profile that has it also has a chain
+A -> B -> C (or A -> B -> X -> C) of observed calls, and each call on that chain is at least twice
+as frequent. They are not in `calls`; they are listed in the trace's `skip_level_artifacts`
+(`from`, `to`, `count`, `via`), which `verify` ignores, so recall can be quoted with and without
+them. `--keep-skip-level` counts them as calls again.
+
 In JavaScript, a class without a constructor runs an implicit one: its frame counts as the class
 (`new Sub()`), and the base constructor it calls (an implicit `super(...)`, not in the source) is
 left out.

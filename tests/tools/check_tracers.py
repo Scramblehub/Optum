@@ -5,7 +5,8 @@
 
 python_trace.py: calls made in a thread the program starts are recorded; the tracer exits as the
 program does (a string given to sys.exit() is printed and means status 1).
-js_profile_trace.py: a profiles folder with no .cpuprofile files is an error, not an empty trace.
+js_profile_trace.py: a profiles folder with no .cpuprofile files is an error, not an empty trace;
+a skip-level A -> C (A -> B -> C in the same profile, A -> C rare) is set aside, not counted.
 """
 import argparse
 import json
@@ -30,6 +31,47 @@ def python_trace(work, name, source):
     r = run([sys.executable, "-I", os.path.join(TRACERS, "python_trace.py"), "--root", app, "-o", out, "--",
              os.path.join(app, "main.py")])
     return r, json.load(open(out))
+
+
+def js_skip_level(work):
+    root = os.path.join(work, "skip")
+    prof = os.path.join(root, "prof")
+    os.makedirs(prof)
+    path = os.path.join(root, "m.js")
+    open(path, "w").write("\n" * 12)
+    nodes = [{"id": "js:m.js", "kind": "module", "name": "m.js", "frontend": "js", "loc": {"file": "m.js", "line": 1, "end_line": 12}}]
+    for name, line in (("a", 1), ("b", 4), ("c", 7), ("d", 10)):
+        nodes.append({"id": "js:m.js#" + name, "kind": "function", "name": name, "frontend": "js",
+                      "loc": {"file": "m.js", "line": line, "end_line": line + 1}})
+    graph = os.path.join(root, "g.json")
+    json.dump({"ir_version": "0.1.0", "nodes": nodes, "edges": []}, open(graph, "w"))
+    pnodes, ids = [{"id": 1, "callFrame": {"functionName": "(root)", "url": "", "lineNumber": 0}, "children": []}], [1]
+
+    def add(parent, fn, line):
+        i = len(pnodes) + 1
+        pnodes.append({"id": i, "callFrame": {"functionName": fn, "url": "file://" + path, "lineNumber": line}, "children": []})
+        pnodes[parent - 1]["children"].append(i)
+        return i
+
+    for k in range(12):  # 12 call paths root -> a -> b -> c
+        a = add(1, "a", 0)
+        add(add(a, "b", 3), "c", 6)
+    add(add(1, "a", 0), "c", 6)  # skip-level: a -> c with b missing
+    add(add(1, "b", 3), "d", 9)  # b -> d once, no path through another frame
+    json.dump({"nodes": pnodes}, open(os.path.join(prof, "p.cpuprofile"), "w"))
+    out = os.path.join(root, "t.json")
+    r = run([sys.executable, "-I", os.path.join(TRACERS, "js_profile_trace.py"), "--graph", graph, "--root", root,
+             "--profiles", prof, "-o", out])
+    assert r.returncode == 0, r.stderr
+    t = json.load(open(out))
+    pairs = {(c["from"], c["to"]): c["count"] for c in t["calls"]}
+    assert pairs.get(("js:m.js#a", "js:m.js#b")) == 12 and pairs.get(("js:m.js#b", "js:m.js#c")) == 12, pairs
+    assert ("js:m.js#a", "js:m.js#c") not in pairs, pairs
+    assert ("js:m.js#b", "js:m.js#d") in pairs, pairs
+    assert t["skip_level_artifacts"] == [{"from": "js:m.js#a", "to": "js:m.js#c", "count": 1, "via": ["js:m.js#b"]}], t
+    r = run([sys.executable, "-I", os.path.join(TRACERS, "js_profile_trace.py"), "--graph", graph, "--root", root,
+             "--profiles", prof, "-o", out, "--keep-skip-level"])
+    assert ("js:m.js#a", "js:m.js#c") in {(c["from"], c["to"]) for c in json.load(open(out))["calls"]}
 
 
 def main():
@@ -81,6 +123,7 @@ fail()
     r = run([sys.executable, "-I", os.path.join(TRACERS, "js_profile_trace.py"), "--graph", graph, "--root", a.work,
              "--profiles", empty, "-o", os.path.join(a.work, "t.json")])
     assert r.returncode != 0 and "no .cpuprofile files" in r.stderr, (r.returncode, r.stderr)
+    js_skip_level(a.work)
     print("tracers: ok")
 
 
