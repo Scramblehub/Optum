@@ -69,6 +69,7 @@ struct Def {
   std::uint32_t line = 1, end_line = 1;
   std::string self_name;    // methods: name of the first parameter
   bool class_first = false;  // methods: the first parameter is the class (@classmethod, __new__)
+  bool property = false;     // methods: @property / @cached_property: obj.name is what it returns
   std::vector<Expr> bases;  // classes
   std::optional<Expr> metaclass;  // classes: `metaclass=` in the class statement
   // Classes: values assigned to self.<attr> in methods, with the method's scope (first few only).
@@ -246,8 +247,24 @@ class Summarizer {
     return found;
   }
 
+  // `@property`, `@functools.cached_property`...: reading the attribute runs it, and what is
+  // called or used is its result.
+  bool is_property(TSNode fn) const {
+    const TSNode parent = ts_node_parent(fn);
+    if (!ts::is(parent, "decorated_definition")) return false;
+    bool found = false;
+    ts::for_named(parent, [&](TSNode c) {
+      if (!ts::is(c, "decorator")) return;
+      const std::string t(ts::text(ts_node_named_child(c, 0), src_));
+      const std::string last = t.substr(t.rfind('.') == std::string::npos ? 0 : t.rfind('.') + 1);
+      if (last == "property" || last == "cached_property") found = true;
+    });
+    return found;
+  }
+
   void on_function(TSNode n, int ds, int as) {
     const int idx = add_def(n, text(ts::field(n, "name")), DefKind::Function, ds, as);
+    if (def(ds).kind == DefKind::Class && is_property(n)) def(idx).property = true;
     const TSNode params = ts::field(n, "parameters");
     bool first = true;
     ts::for_named(params, [&](TSNode p) {
@@ -670,7 +687,7 @@ class Project {
       const auto& defs = mods[std::size_t(m)].defs;
       for (int d = 1; d < static_cast<int>(defs.size()); ++d) {
         const Def& df = defs[std::size_t(d)];
-        if (df.kind == DefKind::Function && defs[std::size_t(df.parent)].kind == DefKind::Class) {
+        if (df.kind == DefKind::Function && !df.property && defs[std::size_t(df.parent)].kind == DefKind::Class) {
           methods_by_name_[df.name].push_back({m, d});
         }
       }
@@ -868,7 +885,10 @@ class Project {
         [[fallthrough]];
       case Value::Kind::Instance:
       case Value::Kind::SelfInstance:
-        if (auto m = lookup_method(obj.ref, name)) return def_value(*m);
+        if (auto m = lookup_method(obj.ref, name)) {
+          if (def(*m).property) return {};  // obj.name is its result, which isn't known
+          return def_value(*m);
+        }
         return lookup_attr(obj.ref, name, depth + 1);
       case Value::Kind::Super:
         for (const DefRef& b : bases_of(obj.ref)) {
@@ -1106,7 +1126,7 @@ class Linker {
       const Value obj = p_.resolve_expr(m_, cs.scope, callee.sub[0], 0);
       if (obj.kind == Value::Kind::Instance || obj.kind == Value::Kind::SelfInstance) {
         const auto mth = p_.lookup_method(obj.ref, callee.text);
-        if (!mth) return std::nullopt;
+        if (!mth || p_.def(*mth).property) return std::nullopt;
         return std::make_pair(*mth, true);
       }
       v = p_.member_of(obj, callee.text, 0);
@@ -1308,6 +1328,7 @@ class Linker {
       }
       switch (obj.kind) {
         case Value::Kind::SelfInstance: {
+          if (const auto prop = p_.lookup_method(obj.ref, name); prop && p_.def(*prop).property) return;  // calls its result
           if (auto mth = p_.lookup_method(obj.ref, name)) {
             call_edge(cs, *mth, Confidence::Exact);
           } else {
@@ -1333,6 +1354,7 @@ class Linker {
           return;
         }
         case Value::Kind::Instance:
+          if (const auto prop = p_.lookup_method(obj.ref, name); prop && p_.def(*prop).property) return;
           if (auto mth = p_.lookup_method(obj.ref, name)) {
             if (callee.sub[0].kind == Expr::Kind::Call) call_edge(cs, *mth, Confidence::Exact);
             else call_edge(cs, *mth, Confidence::Inferred, "local_type");

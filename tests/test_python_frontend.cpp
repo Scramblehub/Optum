@@ -219,3 +219,54 @@ TEST_CASE("python: a method name is not guessed for a call on an imported standa
   REQUIRE(e.count("calls py:m.go -> py:m.Lazy.sub") == 0);
   REQUIRE(e.count("calls py:m.go -> py:m.Lazy.join") == 0);
 }
+
+TEST_CASE("python: a call through a property's result is still guessed by unique name; the property isn't what's called") {
+  Project p;
+  p.write("sql.py",
+          "import copy\n"
+          "class Query:\n"
+          "    def add_ordering(self, *f):\n"
+          "        pass\n"
+          "    def set_empty(self):\n"
+          "        pass\n"
+          "    def chain(self):\n"
+          "        return Query()\n");
+  p.write("qs.py",
+          "import copy\n"
+          "import functools\n"
+          "from sql import Query\n"
+          "class QS:\n"
+          "    def __init__(self, query=None):\n"
+          "        self._query = query or Query()\n"
+          "    @property\n"
+          "    def query(self):\n"
+          "        return self._query\n"
+          "    @property\n"
+          "    def func(self):\n"
+          "        return Query\n"
+          "    def _clone(self):\n"
+          "        c = self.__class__(query=self.query.chain())\n"
+          "        return c\n"
+          "    def order(self, *fields):\n"
+          "        clone = self._clone()\n"
+          "        clone.query.add_ordering(*fields)\n"
+          "        return clone\n"
+          "    def none(self):\n"
+          "        self.query.set_empty()\n"
+          "    def named_like_a_module(self):\n"
+          "        copy = self._clone()\n"
+          "        copy.query.add_ordering()\n"
+          "    def build(self, f, terms):\n"
+          "        f.func(*terms)\n");
+  const auto e = p.edges();
+  auto has = [&](const std::string& from, const std::string& to) {
+    for (const auto& edge : e) {
+      if (edge.starts_with("calls " + from + " -> " + to)) return true;
+    }
+    return false;
+  };
+  REQUIRE(has("py:qs.QS.order", "py:sql.Query.add_ordering"));
+  REQUIRE(has("py:qs.QS.named_like_a_module", "py:sql.Query.add_ordering"));
+  REQUIRE(has("py:qs.QS.none", "py:sql.Query.set_empty"));
+  REQUIRE(e.count("calls py:qs.QS.build -> py:qs.QS.func") == 0);
+}
