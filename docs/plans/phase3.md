@@ -176,6 +176,31 @@ agreement** before each switch; a **rollback rehearsed**, not just planned; the 
 that change** (which screens, for which roles), few and stated in advance; and **subscriptions
 retired**.
 
+## Rehearsing iffy choices: the what-if layer
+
+Optum makes choices it isn't sure of: an inferred call edge, a merge, two records linked as one
+customer, a stage switch. Today three tools rehearse their own: the merge fixer runs the tests and
+restores on failure, a stage's shadow step computes without writing, and `verify` checks inferred
+edges against a real run. The what-if layer makes that one mechanism for every uncertain choice:
+
+1. **Decide.** A choice is flagged when its confidence is low, it's inferred rather than exact, or
+   it changes data or code.
+2. **Mirror.** It's applied to a copy: a worktree for code; for a running company, a second copy
+   of the test company (or the customer's staging) started from a snapshot of the data.
+3. **Replay.** The copy and the untouched original get the same inputs: recorded traffic, the
+   tests, generated business days.
+4. **Compare.** Outputs record by record, and the checks (regulated records, the contract,
+   invariants such as one invoice per order).
+5. **Verdict, with evidence.** Confirmed, rejected (with the first difference), or **not covered**
+   when the replay never reached what the choice changed. A mirror shows a choice broke nothing on
+   the inputs it saw, not that it's right, so every verdict says how much of the change was
+   exercised.
+
+What it gives: safety a customer can see (every iffy choice rehearsed first), and labelled
+examples for the plateau loop (each confirmed or rejected choice shows where Optum's confidence is
+off). Cost: code mirrors are cheap; company mirrors take minutes and double the memory, so they're
+for stage-sized decisions, and small graph choices are batched.
+
 ## Branches, in order
 
 | # | Branch | Job | Size |
@@ -186,6 +211,7 @@ retired**.
 | 4 | `feat/frontend-saas` | Adapters reading each tool's schema and API into the graph (the [protocol](../protocol.md) exists): fields, endpoints in use, flows. `optum diagnose testco/` finds every planted waste and no unplanted ones | 2 weeks |
 | 5 | `feat/unified-model` | One company graph: shared entities across tools; what each tool is actually used for; which to keep and why; the stage order | 1 week |
 | 6 | `feat/coexist-sync` | Two-way sync between the owned system and the remaining tools, by identity; the record-matching measurement against the ground truth | 1–2 weeks |
+| 6b | `feat/what-if` | The what-if layer above: one interface for rehearsing an uncertain choice on a mirror (code worktree or a snapshot copy of the company), replay, compare, a verdict with coverage. Folds in the merge fixer's test gate, a stage's shadow step and `verify`; the platform's restore and rollback drills build on it | 1–2 weeks |
 | 7 | `feat/platform` | The standards filled in for what can't be seen (storage, backups, audit log and revert, idempotency, roles, retention, GDPR, security, monitoring, migrations) and their drills | 2 weeks |
 | 7b | `feat/cost-model` | Resource measurement per replacement in the test company (CPU, memory, storage per 1,000 records, backups); the cost model (both sides, shared costs, one-time, risk) and each stage's business case, before and after | 1 week |
 | 8 | `feat/stage-runner` (first rough version for stage 1: `testco/stages/stage1.py`, all five steps run green with a rehearsed fallback) | The five steps as a harness: shadow, parallel with replay comparison and daily reconciliation, switch, fallback, retire; contract tests for the kept services; rollback | 1–2 weeks |
