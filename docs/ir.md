@@ -30,7 +30,7 @@ inside `attrs`, so typos in an adapter's output show up at once.
 | `kind` | yes | One of the node kinds below |
 | `name` | no | Short display name |
 | `loc` | no | Where it was found (below) |
-| `frontend` | no | What produced it: `python`, `js`, `elf`, an adapter's name |
+| `frontend` | no | What produced it: `python`, `js`, `c`, `binary`, an adapter's name |
 | `confidence` | no, default `exact` | `exact`, `observed` or `inferred` (below) |
 | `attrs` | no | Object of frontend-specific extras: anything goes |
 

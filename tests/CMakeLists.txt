@@ -260,6 +260,7 @@ if(Python3_FOUND)
                "newer_minor|speaks protocol 'optum-frontend/0.2'"
                "bad_protocol|speaks protocol 'optum-frontend/9.0'"
                "crash|exited with status 3; last output:.something broke"
+               "killed|killed by signal 9 .Killed.; last output:.about to die"
                "not_json|stdout is not JSON"
                "bad_graph|not a valid graph: nodes.0..kind: unknown node kind 'gizmo'"
                "slow|no answer within 1 s")
