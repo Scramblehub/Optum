@@ -374,6 +374,7 @@ int main(int argc, char** argv) {
   model_cmd->add_option("-j,--threads", threads, "Worker threads; 0 = all cores");
   model_cmd->add_flag("-q,--quiet", quiet, "Don't print progress to stderr");
   add_adapter_options(model_cmd);
+  add_build_option(model_cmd);
 
   std::string disasm_path;
   auto* disasm_cmd = app.add_subcommand("disasm", "Research aid: an ELF binary's functions and instructions, as JSON");
@@ -427,7 +428,7 @@ int main(int argc, char** argv) {
       require_exists(model_path, "directory");
       require_exists(model_deployment, "file");
       if (!model_recordings.empty()) require_exists(model_recordings, "folder");
-      const optum::Graph g = build_graph(model_path, adapters, threads, adapter_timeout, true);
+      const optum::Graph g = build_graph(model_path, adapters, threads, adapter_timeout, true, compile_commands);
       const optum::Diagnosis d = optum::diagnose(g, model_path);
       optum::ModelInputs mi;
       mi.graph = &g;
