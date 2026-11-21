@@ -84,3 +84,20 @@ TEST_CASE("python: escaped quotes in SQL strings are decoded; raw strings are no
   REQUIRE(e.count("reads py:q.a -> sql:Users") == 1);
   REQUIRE(e.count("reads py:q.b -> sql:raw\\tbl") == 1);
 }
+
+TEST_CASE("python: URLs from configuration defaults and string concatenation") {
+  Project p;
+  p.write("settings.py", "import os\nSHOP = os.environ.get(\"SHOP_URL\", \"http://shop.example.com/api\")\n"
+                          "CRM = os.getenv(\"CRM_URL\", default=\"https://crm.example.com\")\nNOPE = os.environ.get(\"X\")\n");
+  p.write("sync.py",
+          "import requests\nfrom settings import SHOP, CRM, NOPE\n"
+          "def a():\n    requests.get(SHOP + \"/orders\")\n"
+          "def b(order_id):\n    requests.put(f\"{SHOP}/orders/{order_id}\")\n"
+          "def c(x):\n    requests.post(CRM + \"/deals/\" + x)\n"
+          "def d():\n    requests.get(NOPE + \"/x\")\n");
+  const auto e = p.edges();
+  REQUIRE(e.count("reads py:sync.a -> http:shop.example.com/api/orders") == 1);
+  REQUIRE(e.count("sends_to py:sync.b -> http:shop.example.com/api/orders/{}") == 1);
+  REQUIRE(e.count("sends_to py:sync.c -> http:crm.example.com/deals/{}") == 1);  // unknown right side: a hole
+  for (const auto& edge : e) REQUIRE(edge.find("py:sync.d ->") == std::string::npos);  // no default: unknown
+}

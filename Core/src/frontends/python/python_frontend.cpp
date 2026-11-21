@@ -42,12 +42,13 @@ using frontends::to_upper;
 
 // A small, tree-free copy of the expressions we need to resolve later.
 struct Expr {
-  enum class Kind : std::uint8_t { Other, Name, Attr, Call, Str, Dict };
+  enum class Kind : std::uint8_t { Other, Name, Attr, Call, Str, Dict, Concat };
   Kind kind = Kind::Other;
   std::string text;       // Name: the identifier. Attr: the attribute.
   std::vector<Expr> sub;  // Attr: {object}. Call: {function}.
   // Str: literal pieces and holes; a hole holds the identifier inside {...}, or "" if complex.
   // Dict: its string keys ({"email": ..., "name": ...}), as (false, key).
+  // Concat: a + b, with sub = {a, b}.
   std::vector<std::pair<bool, std::string>> parts;
 };
 
@@ -491,8 +492,29 @@ class Summarizer {
       e.text = text(ts::field(n, "attribute"));
       e.sub.push_back(to_expr(ts::field(n, "object")));
     } else if (t == "call") {
+      // Configuration with a default (os.environ.get("SHOP_URL", "http://...")) means the default:
+      // that's the address the code uses unless it's deployed with another.
+      const std::string fn = strip_spaces(text(ts::field(n, "function")));
+      if (fn == "os.environ.get" || fn == "os.getenv" || fn == "environ.get" || fn == "getenv") {
+        const TSNode args = ts::field(n, "arguments");
+        int pos = 0;
+        TSNode fallback{};
+        ts::for_named(args, [&](TSNode a) {
+          if (ts::is(a, "comment")) return;
+          if (ts::is(a, "keyword_argument")) {
+            if (ts::text(ts::field(a, "name"), src_) == "default") fallback = ts::field(a, "value");
+            return;
+          }
+          if (pos++ == 1) fallback = a;
+        });
+        if (!ts_node_is_null(fallback)) return to_expr(fallback);
+      }
       e.kind = Expr::Kind::Call;
       e.sub.push_back(to_expr(ts::field(n, "function")));
+    } else if (t == "binary_operator" && ts::text(ts::field(n, "operator"), src_) == "+") {
+      e.kind = Expr::Kind::Concat;
+      e.sub.push_back(to_expr(ts::field(n, "left")));
+      e.sub.push_back(to_expr(ts::field(n, "right")));
     } else if (t == "string") {
       e.kind = Expr::Kind::Str;
       add_string_parts(n, e);
@@ -924,6 +946,12 @@ class Project {
         out += v ? *v : "{}";
       }
       return out;
+    }
+    if (e.kind == Expr::Kind::Concat) {  // a + b: an unknown right side is a hole, like f"{x}"
+      const auto left = eval_str(m, scope, e.sub[0], depth + 1);
+      if (!left) return std::nullopt;
+      const auto right = eval_str(m, scope, e.sub[1], depth + 1);
+      return *left + (right ? *right : "{}");
     }
     if (e.kind != Expr::Kind::Name) return std::nullopt;
     const auto& defs = mods[std::size_t(m)].defs;

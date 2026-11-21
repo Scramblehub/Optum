@@ -1,0 +1,286 @@
+{
+ "id": "orders-to-accounting",
+ "name": "Orders to accounting",
+ "active": true,
+ "nodes": [
+  {
+   "id": "every-5-min",
+   "name": "Every 5 minutes",
+   "type": "n8n-nodes-base.scheduleTrigger",
+   "typeVersion": 1.2,
+   "position": [
+    0,
+    0
+   ],
+   "parameters": {
+    "rule": {
+     "interval": [
+      {
+       "field": "minutes",
+       "minutesInterval": 5
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "get-paid-orders",
+   "name": "Get paid orders",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.2,
+   "position": [
+    220,
+    0
+   ],
+   "parameters": {
+    "method": "GET",
+    "url": "http://shop.testco.internal:8080/wp-json/wc/v3/orders",
+    "options": {},
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "Basic YWRtaW46dGVzdGNvU2hvcEFwaVBhc3N3b3JkMDA="
+      }
+     ]
+    },
+    "sendQuery": true,
+    "queryParameters": {
+     "parameters": [
+      {
+       "name": "status",
+       "value": "processing"
+      },
+      {
+       "name": "per_page",
+       "value": "100"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "find-invoice",
+   "name": "Find invoice",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.2,
+   "position": [
+    440,
+    0
+   ],
+   "parameters": {
+    "method": "POST",
+    "url": "http://accounting.testco.internal:8069/jsonrpc",
+    "options": {},
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{ JSON.stringify({jsonrpc: \"2.0\", method: \"call\", params: {service: \"object\", method: \"execute_kw\", args: [\"testco\", 2, \"admin\", \"account.move\", \"search_count\", [[[\"ref\", \"=\", \"order \" + $json.id]]]]} }) }}"
+   }
+  },
+  {
+   "id": "no-invoice-yet",
+   "name": "No invoice yet",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 2.2,
+   "position": [
+    660,
+    0
+   ],
+   "parameters": {
+    "conditions": {
+     "options": {
+      "caseSensitive": true,
+      "leftValue": "",
+      "typeValidation": "strict",
+      "version": 2
+     },
+     "conditions": [
+      {
+       "id": "c1",
+       "leftValue": "={{ $json.result }}",
+       "rightValue": 0,
+       "operator": {
+        "type": "number",
+        "operation": "equals"
+       }
+      }
+     ],
+     "combinator": "and"
+    },
+    "options": {}
+   }
+  },
+  {
+   "id": "find-customer",
+   "name": "Find customer",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.2,
+   "position": [
+    880,
+    -100
+   ],
+   "parameters": {
+    "method": "POST",
+    "url": "http://accounting.testco.internal:8069/jsonrpc",
+    "options": {},
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{ JSON.stringify({jsonrpc: \"2.0\", method: \"call\", params: {service: \"object\", method: \"execute_kw\", args: [\"testco\", 2, \"admin\", \"res.partner\", \"search\", [[[\"email\", \"=\", $('Get paid orders').item.json.billing.email.toLowerCase().trim()]]], {limit: 1}]} }) }}"
+   }
+  },
+  {
+   "id": "create-invoice",
+   "name": "Create invoice",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.2,
+   "position": [
+    1100,
+    -100
+   ],
+   "parameters": {
+    "method": "POST",
+    "url": "http://accounting.testco.internal:8069/jsonrpc",
+    "options": {},
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{ JSON.stringify({jsonrpc: \"2.0\", method: \"call\", params: {service: \"object\", method: \"execute_kw\", args: [\"testco\", 2, \"admin\", \"account.move\", \"create\", [{move_type: \"out_invoice\", partner_id: $json.result[0], ref: \"order \" + $('Get paid orders').item.json.id, invoice_line_ids: $('Get paid orders').item.json.line_items.map(li => [0, 0, {name: li.name, quantity: li.quantity, price_unit: parseFloat(li.price), tax_ids: [[6, 0, [__VAT_TAX_ID__]]]}])}]]} }) }}"
+   }
+  },
+  {
+   "id": "post-invoice",
+   "name": "Post invoice",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.2,
+   "position": [
+    1320,
+    -100
+   ],
+   "parameters": {
+    "method": "POST",
+    "url": "http://accounting.testco.internal:8069/jsonrpc",
+    "options": {},
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{ JSON.stringify({jsonrpc: \"2.0\", method: \"call\", params: {service: \"object\", method: \"execute_kw\", args: [\"testco\", 2, \"admin\", \"account.move\", \"action_post\", [[$json.result]]]} }) }}"
+   }
+  },
+  {
+   "id": "mark-completed",
+   "name": "Mark completed",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.2,
+   "position": [
+    1540,
+    0
+   ],
+   "parameters": {
+    "method": "PUT",
+    "url": "=http://shop.testco.internal:8080/wp-json/wc/v3/orders/{{ $('Get paid orders').item.json.id }}",
+    "options": {},
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "Basic YWRtaW46dGVzdGNvU2hvcEFwaVBhc3N3b3JkMDA="
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={\"status\": \"completed\"}"
+   }
+  }
+ ],
+ "connections": {
+  "Every 5 minutes": {
+   "main": [
+    [
+     {
+      "node": "Get paid orders",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Get paid orders": {
+   "main": [
+    [
+     {
+      "node": "Find invoice",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Find invoice": {
+   "main": [
+    [
+     {
+      "node": "No invoice yet",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "No invoice yet": {
+   "main": [
+    [
+     {
+      "node": "Find customer",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "Mark completed",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Find customer": {
+   "main": [
+    [
+     {
+      "node": "Create invoice",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Create invoice": {
+   "main": [
+    [
+     {
+      "node": "Post invoice",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Post invoice": {
+   "main": [
+    [
+     {
+      "node": "Mark completed",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ },
+ "settings": {
+  "executionOrder": "v1"
+ },
+ "pinData": {}
+}

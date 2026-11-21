@@ -1,0 +1,58 @@
+{
+ "id": "abandoned-cart-reminder",
+ "name": "Abandoned cart reminder",
+ "active": true,
+ "settings": {
+  "executionOrder": "v1"
+ },
+ "pinData": {},
+ "nodes": [
+  {
+   "id": "cart-webhook",
+   "name": "Cart abandoned",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 2,
+   "position": [
+    0,
+    0
+   ],
+   "webhookId": "5b0c6a3e-cart-0000-0000-000000000001",
+   "parameters": {
+    "httpMethod": "POST",
+    "path": "abandoned-cart",
+    "options": {}
+   }
+  },
+  {
+   "id": "send-reminder",
+   "name": "Send reminder",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.2,
+   "position": [
+    220,
+    0
+   ],
+   "parameters": {
+    "method": "POST",
+    "url": "http://marketing.testco.internal:9000/api/campaigns/abandoned-cart/send",
+    "options": {},
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={\"email\": \"{{ $json.body.email }}\"}"
+   }
+  }
+ ],
+ "connections": {
+  "Cart abandoned": {
+   "main": [
+    [
+     {
+      "node": "Send reminder",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ }
+}

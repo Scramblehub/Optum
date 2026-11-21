@@ -39,7 +39,8 @@ using frontends::to_upper;
 // ===================================================================== pass 1 data
 
 struct Expr {
-  enum class Kind : std::uint8_t { Other, Name, Member, Call, New, Str, This, Super, TypeRef, Require, RequirePattern, Object };
+  enum class Kind : std::uint8_t { Other, Name, Member, Call, New, Str, This, Super, TypeRef, Require, RequirePattern, Object,
+                                   Concat };
   Kind kind = Kind::Other;
   std::string text;       // Name: identifier. Member: property. Require: the module specifier.
   std::vector<Expr> sub;  // Member: {object}. Call: {function}. New: {constructor}. TypeRef: {type}.
@@ -630,6 +631,17 @@ class Summarizer {
       e.kind = Expr::Kind::Member;
       e.text = text(ts::field(n, "property"));
       e.sub.push_back(to_expr(ts::field(n, "object")));
+    } else if (t == "binary_expression") {
+      const std::string op = text(ts::field(n, "operator"));
+      if (op == "||" || op == "??") {
+        // process.env.SHOP_URL || "http://...": configuration with a default means the default.
+        const TSNode right = ts::field(n, "right");
+        if (ts::is(right, "string") || ts::is(right, "template_string")) return to_expr(right);
+      } else if (op == "+") {
+        e.kind = Expr::Kind::Concat;
+        e.sub.push_back(to_expr(ts::field(n, "left")));
+        e.sub.push_back(to_expr(ts::field(n, "right")));
+      }
     } else if (t == "call_expression") {
       if (ts::text(ts::field(n, "function"), src_) == "require") {
         if (auto spec = string_arg(n)) {
@@ -1090,6 +1102,12 @@ class Project {
         out += v ? *v : "{}";
       }
       return out;
+    }
+    if (e.kind == Expr::Kind::Concat) {  // a + b: an unknown right side is a hole, like `${x}`
+      const auto left = eval_str(m, scope, e.sub[0], depth + 1);
+      if (!left) return std::nullopt;
+      const auto right = eval_str(m, scope, e.sub[1], depth + 1);
+      return *left + (right ? *right : "{}");
     }
     if (e.kind != Expr::Kind::Name) return std::nullopt;
     const auto& defs = mods[std::size_t(m)].defs;

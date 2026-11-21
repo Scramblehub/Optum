@@ -216,6 +216,12 @@ set_tests_properties(cli_diagnose_markdown PROPERTIES PASS_REGULAR_EXPRESSION "#
 if(Python3_FOUND)
   add_test(NAME testco_generator COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_testco_data.py)
   add_test(NAME testco_observe_records COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_observe.py)
+  # The test company's glue: optum diagnose finds its planted waste (static: no Docker needed).
+  add_test(NAME testco_diagnose_glue
+           COMMAND sh -c "$<TARGET_FILE:optum> diagnose ${CMAKE_SOURCE_DIR}/testco/company -q -f json -o ${CMAKE_CURRENT_BINARY_DIR}/testco_glue.json --adapter '${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/Core/adapters/n8n/optum_n8n.py' && ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_diagnosis.py ${CMAKE_CURRENT_BINARY_DIR}/testco_glue.json ${CMAKE_SOURCE_DIR}/testco/expected_diagnosis.json")
+  # ...and the webhook's URL (process.env.X || default, a template with a hole) reaches the shop.
+  add_test(NAME testco_js_url_defaults
+           COMMAND sh -c "$<TARGET_FILE:optum> graph ${CMAKE_SOURCE_DIR}/testco/company -q -o ${CMAKE_CURRENT_BINARY_DIR}/testco_glue_graph.json && ${Python3_EXECUTABLE} -c \"import json, sys; g = json.load(open(sys.argv[1])); assert any(e['from'].startswith('js:payments_webhook.js') and e['to'] == 'http:shop.testco.internal:8080/wp-json/wc/v3/orders/{}' for e in g['edges']), 'the JS webhook does not reach the shop'\" ${CMAKE_CURRENT_BINARY_DIR}/testco_glue_graph.json")
 endif()
 
 # The first automatic fix (docs/fixes.md): merge exact duplicates, gated by the sample's tests.
