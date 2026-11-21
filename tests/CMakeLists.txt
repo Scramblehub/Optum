@@ -219,6 +219,8 @@ if(Python3_FOUND)
   add_test(NAME testco_generator COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_testco_data.py)
   add_test(NAME testco_observe_records COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_observe.py)
   add_test(NAME infer_spec COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_infer_spec.py $<TARGET_FILE:optum>)
+  # The plateau loop's gate: before/after per relationship type; a lost call fails (docs/plans/plateau.md).
+  add_test(NAME plateau_compare COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_plateau_compare.py)
   # The test company's glue: optum diagnose finds its planted waste (static: no Docker needed).
   add_test(NAME testco_diagnose_glue
            COMMAND sh -c "$<TARGET_FILE:optum> diagnose ${CMAKE_SOURCE_DIR}/testco/company -q -f json -o ${CMAKE_CURRENT_BINARY_DIR}/testco_glue.json --adapter '${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/Core/adapters/n8n/optum_n8n.py' && ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_diagnosis.py ${CMAKE_CURRENT_BINARY_DIR}/testco_glue.json ${CMAKE_SOURCE_DIR}/testco/expected_diagnosis.json")
