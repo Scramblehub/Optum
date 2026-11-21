@@ -183,3 +183,429 @@ TEST_CASE("c: compile_commands.json gives the -D / -U flags of each file") {
   CHECK(confidence("c:src/a.c#g") == Confidence::Inferred);
   CHECK(confidence("c:src/a.c#h") == Confidence::Exact);
 }
+
+TEST_CASE("c: a prototype or definition with a parenthesised name is that function") {
+  TempDir dir;
+  dir.write("api.h",
+            "LUA_API int (lua_settop) (lua_State *L, int idx);\n"
+            "LUA_API const char *(lua_tolstring) (lua_State *L, int idx);\n"
+            "#define lua_pop(L,n) lua_settop(L, -(n)-1)\n");
+  dir.write("api.c",
+            "#include \"api.h\"\n"
+            "LUALIB_API lua_Integer (luaL_len) (lua_State *L, int idx) { return 0; }\n"
+            "LUALIB_API lua_Unsigned lua_rawlen (lua_State *L, int idx) { return 0; }\n"
+            "LUA_API int (lua_settop) (lua_State *L, int idx) { return 0; }\n"
+            "void use(lua_State *L) { lua_settop(L, 0); luaL_len(L, 1); lua_rawlen(L, 1); lua_pop(L, 1); }\n");
+  const optum::Graph g = optum::extract_c_files(dir.path, {"api.h", "api.c"});
+  const optum::Edge* settop = find_call(g, "c:api.c#use", "c:api.c#lua_settop");
+  REQUIRE(settop);
+  CHECK(settop->confidence == optum::Confidence::Exact);
+  const optum::Edge* len = find_call(g, "c:api.c#use", "c:api.c#luaL_len");  // not a function named lua_Integer
+  REQUIRE(len);
+  CHECK(len->confidence == optum::Confidence::Exact);
+  CHECK(find_call(g, "c:api.c#use", "c:api.c#lua_rawlen"));  // `API Type name (...)`, not a function named lua_Unsigned
+}
+
+TEST_CASE("c: NAME(args) { } inside a function body is not a function definition") {
+  TempDir dir;
+  dir.write("vm.c",
+            "void op_a(void) {}\n"
+            "void op_b(void) {}\n"
+            "int run(int i) {\n"
+            "  vmdispatch(GET_OPCODE(i)) {\n"
+            "    vmcase(OP_A) { op_a(); vmbreak; }\n"
+            "    vmcase(OP_B) { op_b(); vmbreak; }\n"
+            "  }\n"
+            "  return 0;\n"
+            "}\n");
+  const optum::Graph g = optum::extract_c_files(dir.path, {"vm.c"});
+  CHECK(find_call(g, "c:vm.c#run", "c:vm.c#op_a"));
+  CHECK(find_call(g, "c:vm.c#run", "c:vm.c#op_b"));
+  for (const optum::Node& n : g.nodes()) {
+    CHECK(n.name != "OP_A");
+    CHECK(n.name != "vmdispatch");
+  }
+}
+
+TEST_CASE("c: a prototype followed by an attribute macro with double parentheses is still a prototype") {
+  TempDir dir;
+  dir.write("h.h",
+            "int table_init(table_t *t) TABLE_ATTRS((warn_unused_result));\n"
+            "void table_close(table_t *t) TABLE_ATTRS((nonnull));\n");
+  dir.write("t.c", "#include \"h.h\"\nint table_init(table_t *t) { return 0; }\nvoid table_close(table_t *t) {}\n");
+  dir.write("u.c", "#include \"h.h\"\nvoid use(table_t *t) { table_init(t); table_close(t); }\n");
+  const optum::Graph g = optum::extract_c_files(dir.path, {"h.h", "t.c", "u.c"});
+  for (const char* to : {"c:t.c#table_init", "c:t.c#table_close"}) {
+    const optum::Edge* e = find_call(g, "c:u.c#use", to);
+    REQUIRE(e);
+    CHECK(e->confidence == optum::Confidence::Exact);
+  }
+}
+
+TEST_CASE("c: a comment in a backslash-continued macro body doesn't hide its calls") {
+  TempDir dir;
+  dir.write("m.c",
+            "void grow(void) {}\n"
+            "void push(void) {}\n"
+            "#define check(L, n) \\\n"
+            "  if ((n) > 1) { grow(); /* may move the stack */ } \\\n"
+            "  else { (void)0; }\n"
+            "#define PUSH(L) \\\n"
+            "  /* multi\n"
+            "     line */ push()\n"
+            "void run(int *L) { check(L, 2); PUSH(L); }\n");
+  const optum::Graph g = optum::extract_c_files(dir.path, {"m.c"});
+  CHECK(find_call(g, "c:m.c#run", "c:m.c#grow"));
+  CHECK(find_call(g, "c:m.c#run", "c:m.c#push"));
+}
+
+TEST_CASE("c: #ifdef lines inside an initializer list don't make their names values") {
+  TempDir dir;
+  dir.write("o.c",
+            "static const char *const opts[] = {\n"
+            "#ifdef FEATURE_ZED\n"
+            "  \"ZED\",\n"
+            "#endif\n"
+            "  \"end\"\n"
+            "};\n"
+            "void zed(void) {}\n"
+            "void run(void) {\n"
+            "#ifdef FEATURE_ZED\n"
+            "  zed();\n"
+            "#endif\n"
+            "}\n");
+  const optum::Graph g = optum::extract_c_files(dir.path, {"o.c"});
+  const optum::Edge* e = find_call(g, "c:o.c#run", "c:o.c#zed");
+  REQUIRE(e);
+  CHECK(e->confidence == optum::Confidence::Inferred);  // nobody defines FEATURE_ZED: off in this build
+  CHECK(e->attrs.value("inactive", false));
+}
+
+TEST_CASE("c: a name another translation unit uses as a value doesn't make this file's #if unknown") {
+  TempDir dir;
+  // query.c prints config names (a value use of CFG_ZED); it isn't part of lib.c's build.
+  dir.write("query.c", "int show(int x);\nint query(void) { return show(CFG_ZED); }\n");
+  dir.write("lib.c",
+            "void zed(void) {}\n"
+            "void run(void) {\n"
+            "#if defined(CFG_ZED)\n"
+            "  zed();\n"
+            "#endif\n"
+            "}\n");
+  dir.write("own.c",  // a value use in the same file: CFG_ZED may come from a system header
+            "void zed2(void) {}\n"
+            "int v(void) { return CFG_ZED; }\n"
+            "void run2(void) {\n"
+            "#if defined(CFG_ZED)\n"
+            "  zed2();\n"
+            "#endif\n"
+            "}\n");
+  const optum::Graph g = optum::extract_c_files(dir.path, {"query.c", "lib.c", "own.c"});
+  const optum::Edge* off = find_call(g, "c:lib.c#run", "c:lib.c#zed");
+  REQUIRE(off);
+  CHECK(off->confidence == optum::Confidence::Inferred);
+  CHECK(off->attrs.value("inactive", false));
+  const optum::Edge* unknown = find_call(g, "c:own.c#run2", "c:own.c#zed2");
+  REQUIRE(unknown);
+  CHECK(unknown->confidence == optum::Confidence::Exact);
+}
+
+TEST_CASE("c: names on the continuation line of a #if are conditions, not values") {
+  TempDir dir;
+  // Cut from the sqlite amalgamation: the parser reads the second line of the #if as code.
+  dir.write("o.c",
+            "#if !defined(SQLITE_CORE) \\\n"
+            "  || (defined(SQLITE_ENABLE_RTREE) && !defined(SQLITE_OMIT_VIRTUALTABLE))\n"
+            "\n"
+            "#ifndef SQLITE_CORE\n"
+            "/*   #include \"sqlite3ext.h\" */\n"
+            "  SQLITE_EXTENSION_INIT1\n"
+            "#else\n"
+            "/*   #include \"sqlite3.h\" */\n"
+            "void zed(void) {}\n"
+            "void run(void) {\n"
+            "#if defined(SQLITE_OMIT_VIRTUALTABLE)\n"
+            "  zed();\n"
+            "#endif\n"
+            "}\n");
+  const optum::Graph g = optum::extract_c_files(dir.path, {"o.c"});
+  const optum::Edge* e = find_call(g, "c:o.c#run", "c:o.c#zed");
+  REQUIRE(e);
+  CHECK(e->confidence == optum::Confidence::Inferred);
+  CHECK(e->attrs.value("inactive", false));
+}
+
+TEST_CASE("c: a multi-line comment after a whole #define leaves the declarations below it alone") {
+  TempDir dir;
+  dir.write("z.h",
+            "#define LIMIT_DEFAULT 27   /* by default, the decoder will refuse any frame\n"
+            "                           * requiring more memory than this window\n"
+            "                           */\n"
+            "ZLIB_API size_t z_free(void* s);\n");
+  dir.write("z.c", "#include \"z.h\"\nsize_t z_free(void* s) { return 0; }\n");
+  dir.write("u.c", "#include \"z.h\"\nvoid use(void* s) { z_free(s); }\n");
+  const optum::Graph g = optum::extract_c_files(dir.path, {"z.h", "z.c", "u.c"});
+  const optum::Edge* e = find_call(g, "c:u.c#use", "c:z.c#z_free");
+  REQUIRE(e);
+  CHECK(e->confidence == optum::Confidence::Exact);  // declared: not name_only
+}
+
+TEST_CASE("c: a function renamed by a #define in a compiled branch is compiled, whatever an off branch defines") {
+  TempDir dir;
+  // sha256.c: the C version is `process_c`, renamed `process` unless the accelerated version is on.
+  dir.write("sha.c",
+            "#if defined(USE_ACCEL)\n"
+            "#  if !defined(HAVE_NEON)\n"
+            "#    undef USE_ACCEL\n"
+            "#  endif\n"
+            "#endif\n"
+            "#if !defined(USE_ACCEL)\n"
+            "#define process_c process\n"
+            "#endif\n"
+            "int process_c(int *ctx) { return 0; }\n"
+            "#if defined(USE_ACCEL)\n"
+            "int process(int *ctx) { return process_c(ctx); }\n"
+            "#endif\n"
+            "int update(int *ctx) { return process(ctx); }\n");
+  const optum::Graph g = optum::extract_c_files(dir.path, {"sha.c"});
+  const optum::Edge* e = find_call(g, "c:sha.c#update", "c:sha.c#process");
+  REQUIRE(e);
+  CHECK(e->confidence == optum::Confidence::Exact);
+  CHECK_FALSE(e->attrs.value("inactive", false));
+}
+
+TEST_CASE("c: <assert.h> is never a vendored header that happens to share its name") {
+  TempDir dir;
+  dir.write("deps/lib/internal/assert.h", "#define assert(x) vendored_check(x)\nvoid vendored_check(int x);\n");
+  dir.write("deps/lib/impl.c", "void vendored_check(int x) {}\n");
+  dir.write("deps/lib/sub/d.c",  // inside the same vendored tree a quoted include may find it
+            "#include \"internal/assert.h\"\nvoid d(int x) { assert(x); }\n");
+  dir.write("src/a.c", "#include <assert.h>\nvoid f(int x) { assert(x); }\n");
+  dir.write("src/b.c", "#include \"internal/assert.h\"\nvoid g(int x) { assert(x); }\n");  // not our tree
+  const optum::Graph g = optum::extract_c_files(dir.path, {"deps/lib/internal/assert.h", "deps/lib/impl.c",
+                                                            "deps/lib/sub/d.c", "src/a.c", "src/b.c"});
+  CHECK_FALSE(find_call(g, "c:src/a.c#f", "c:deps/lib/impl.c#vendored_check"));
+  CHECK_FALSE(find_call(g, "c:src/b.c#g", "c:deps/lib/impl.c#vendored_check"));
+  CHECK(find_call(g, "c:deps/lib/sub/d.c#d", "c:deps/lib/impl.c#vendored_check"));
+  // The project's own include/ directory still serves <angle> includes without a build database.
+  TempDir own;
+  own.write("include/lib/api.h", "void api_call(void);\n");
+  own.write("src/api.c", "#include <lib/api.h>\nvoid api_call(void) {}\n");
+  own.write("src/use.c", "#include <lib/api.h>\nvoid use(void) { api_call(); }\n");
+  const optum::Graph h = optum::extract_c_files(own.path, {"include/lib/api.h", "src/api.c", "src/use.c"});
+  const optum::Edge* e = find_call(h, "c:src/use.c#use", "c:src/api.c#api_call");
+  REQUIRE(e);
+  CHECK(e->confidence == optum::Confidence::Exact);
+}
+
+TEST_CASE("c: --compile-commands gives -D, -I (even outside the root) and the files in the build") {
+  TempDir dir;
+  const fs::path gen = dir.path.parent_path() / ("optum_c_gen_" + std::to_string(getpid()));
+  fs::remove_all(gen);
+  fs::create_directories(gen);
+  std::ofstream(gen / "gen_config.h") << "#define HAVE_FEATURE 1\n";
+  dir.write("src/a.c",
+            "#include \"gen_config.h\"\n"
+            "void dup_fn(void);\n"
+            "void feat(void) {}\n"
+            "void jem(void) {}\n"
+            "void nope(void) {}\n"
+            "void run(void) {\n"
+            "#if defined(HAVE_FEATURE)\n"
+            "  feat();\n"
+            "#endif\n"
+            "#ifdef USE_JEMALLOC\n"
+            "  jem();\n"
+            "#endif\n"
+            "#ifdef NOT_SET\n"
+            "  nope();\n"
+            "#endif\n"
+            "  dup_fn();\n"
+            "}\n");
+  dir.write("lib/other.c", "void dup_fn(void) {}\n");
+  dir.write("alt/dup.c", "void dup_fn(void) {}\n");
+  const std::string db = (dir.path / "cc.json").string();
+  std::ofstream(db) << "[{\"directory\": \"" << dir.path.generic_string()
+                    << "\", \"file\": \"src/a.c\", \"command\": \"cc -DUSE_JEMALLOC -I" << gen.generic_string()
+                    << " -c src/a.c\"}, {\"directory\": \"" << dir.path.generic_string()
+                    << "\", \"file\": \"lib/other.c\", \"command\": \"cc -c lib/other.c\"}]";
+  auto edge = [&](const optum::Graph& g, const char* to) { return find_call(g, "c:src/a.c#run", to); };
+  const std::vector<fs::path> files = {"src/a.c", "lib/other.c", "alt/dup.c"};
+
+  optum::CStats with;
+  const optum::Graph g = optum::extract_c_files(dir.path, files, &with, 0, db);
+  REQUIRE(edge(g, "c:src/a.c#feat"));
+  CHECK(edge(g, "c:src/a.c#feat")->confidence == optum::Confidence::Exact);  // from the generated header
+  REQUIRE(edge(g, "c:src/a.c#jem"));
+  CHECK(edge(g, "c:src/a.c#jem")->confidence == optum::Confidence::Exact);  // from -D
+  REQUIRE(edge(g, "c:src/a.c#nope"));
+  CHECK(edge(g, "c:src/a.c#nope")->attrs.value("inactive", false));  // off, now for certain
+  REQUIRE(edge(g, "c:lib/other.c#dup_fn"));  // the definition that is in the build
+  CHECK_FALSE(edge(g, "c:alt/dup.c#dup_fn"));
+  CHECK(with.build_database);
+  CHECK(with.external_headers == 1);
+  CHECK(with.assumed_off_names == 0);
+
+  optum::CStats without;
+  const optum::Graph h = optum::extract_c_files(dir.path, files, &without, 0, "none");
+  CHECK(edge(h, "c:src/a.c#feat")->attrs.value("inactive", false));  // a guess
+  CHECK(edge(h, "c:src/a.c#jem")->attrs.value("inactive", false));
+  CHECK_FALSE(without.build_database);
+  CHECK(without.assumed_off_names >= 2);
+  CHECK(without.assumed_off_edges >= 2);
+  CHECK_FALSE(edge(h, "c:lib/other.c#dup_fn"));  // two definitions: ambiguous without the file list
+  fs::remove_all(gen);
+}
+
+TEST_CASE("c: a callee defined in both branches of an #if/#else is one function, linked from other files") {
+  TempDir dir;
+  dir.write("lib/cfg.h", "#define ONE 1\n");
+  dir.write("lib/lib.c",
+            "#include \"cfg.h\"\n"
+            "#ifdef TWO\n"
+            "int callee(int x) { return 2; }\n"
+            "#else\n"
+            "int callee(int x) { return 1; }\n"
+            "#endif\n");
+  dir.write("app/main.c", "int callee(int x);\nint main(void) { return callee(1); }\n");
+  const optum::Graph g = optum::extract_c_files(dir.path, {"lib/cfg.h", "lib/lib.c", "app/main.c"});
+  const optum::Edge* e = find_call(g, "c:app/main.c#main", "c:lib/lib.c#callee");
+  REQUIRE(e);
+  CHECK(e->confidence == optum::Confidence::Exact);  // the #else definition is the compiled one
+  CHECK_FALSE(e->attrs.value("inactive", false));
+}
+
+TEST_CASE("c: a macro from a generated header found through -I counts, directly and through another header") {
+  TempDir dir;
+  dir.write("build/config.h", "#define X 1\n#define LEVEL 3\n");
+  dir.write("inc/config.h", "/* another build's config: defines nothing */\n");  // first in the database
+  dir.write("src/other.c", "#include \"config.h\"\nvoid other(void) {}\n");
+  dir.write("src/h.h", "#include \"config.h\"\n");
+  dir.write("src/sub/a.c",
+            "#include \"config.h\"\n"
+            "void direct(void) {}\n"
+            "void off(void) {}\n"
+            "void run(void) {\n"
+            "#ifdef X\n"
+            "  direct();\n"
+            "#endif\n"
+            "#if LEVEL > 2\n"
+            "  direct();\n"
+            "#endif\n"
+            "#ifndef X\n"
+            "  off();\n"  // X is defined by config.h: this is off for certain
+            "#endif\n"
+            "}\n");
+  dir.write("src/sub/b.c",
+            "#include \"../h.h\"\n"
+            "void via(void) {}\n"
+            "void run2(void) {\n"
+            "#ifdef X\n"
+            "  via();\n"
+            "#endif\n"
+            "}\n");
+  dir.write("src/c.c",
+            "#include <config.h>\n"
+            "void angle(void) {}\n"
+            "void run3(void) {\n"
+            "#ifdef X\n"
+            "  angle();\n"
+            "#endif\n"
+            "}\n");
+  const std::string root = dir.path.generic_string();
+  std::ofstream(dir.path / "cc.json")
+      << "[{\"directory\": \"" << root << "\", \"file\": \"src/other.c\", \"command\": \"cc -I" << root
+      << "/inc -c src/other.c\"}, {\"directory\": \"" << root << "\", \"file\": \"src/sub/a.c\", \"command\": \"cc -I" << root
+      << "/build -c src/sub/a.c\"}, {\"directory\": \"" << root << "\", \"file\": \"src/sub/b.c\", \"command\": \"cc -I"
+      << root << "/build -c src/sub/b.c\"}, {\"directory\": \"" << root
+      << "\", \"file\": \"src/c.c\", \"command\": \"cc -isystem " << root << "/build -c src/c.c\"}]";
+  const optum::Graph g = optum::extract_c_files(dir.path, {"inc/config.h", "src/other.c", "src/h.h", "src/sub/a.c", "src/sub/b.c", "src/c.c"}, nullptr, 0,
+                                                (dir.path / "cc.json").string());
+  for (auto [from, to] : {std::pair{"c:src/sub/a.c#run", "c:src/sub/a.c#direct"},
+                          std::pair{"c:src/sub/b.c#run2", "c:src/sub/b.c#via"},
+                          std::pair{"c:src/c.c#run3", "c:src/c.c#angle"}}) {
+    const optum::Edge* e = find_call(g, from, to);
+    REQUIRE(e);
+    CHECK(e->confidence == optum::Confidence::Exact);
+    CHECK_FALSE(e->attrs.value("inactive", false));
+  }
+  const optum::Edge* off = find_call(g, "c:src/sub/a.c#run", "c:src/sub/a.c#off");
+  REQUIRE(off);
+  CHECK(off->attrs.value("inactive", false));  // the definition of X was seen, so this is certain
+}
+
+TEST_CASE("c: a function defined in several branches of one #if chain is active if any definition is compiled") {
+  TempDir dir;
+  dir.write("lib.c",
+            "#ifndef X\n"
+            "int real_or_stub(int x) { return 1; }\n"
+            "#else\n"
+            "int real_or_stub(int x) { return 0; }\n"
+            "#endif\n"
+            "#ifdef A\n"
+            "int chain(void) { return 1; }\n"
+            "#elif defined(B)\n"
+            "int chain(void) { return 2; }\n"
+            "#elif defined(C)\n"
+            "int chain(void) { return 3; }\n"
+            "#else\n"
+            "int chain(void) { return 4; }\n"
+            "#endif\n"
+            "#if 0\n"
+            "int never(void) { return 1; }\n"
+            "#elif 0\n"
+            "int never(void) { return 2; }\n"
+            "#endif\n");
+  dir.write("main.c",
+            "int real_or_stub(int x);\nint chain(void);\nint never(void);\n"
+            "int main(void) { never(); chain(); return real_or_stub(1); }\n");
+  auto check = [&](const std::string& db) {
+    const optum::Graph g = optum::extract_c_files(dir.path, {"lib.c", "main.c"}, nullptr, 0, db);
+    const optum::Edge* a = find_call(g, "c:main.c#main", "c:lib.c#real_or_stub");
+    const optum::Edge* b = find_call(g, "c:main.c#main", "c:lib.c#chain");
+    const optum::Edge* c = find_call(g, "c:main.c#main", "c:lib.c#never");
+    REQUIRE(a);
+    REQUIRE(b);
+    REQUIRE(c);
+    CHECK(a->confidence == optum::Confidence::Exact);  // X undefined: the first; X defined: the stub
+    CHECK_FALSE(a->attrs.contains("condition"));
+    CHECK(b->confidence == optum::Confidence::Exact);  // only the #else is compiled
+    CHECK_FALSE(b->attrs.value("inactive", false));
+    CHECK(c->confidence == optum::Confidence::Inferred);  // no branch is compiled
+    CHECK(c->attrs.value("inactive", false));
+  };
+  check("none");
+  std::ofstream(dir.path / "cc.json") << "[{\"directory\": \"" << dir.path.generic_string()
+                                      << "\", \"file\": \"lib.c\", \"command\": \"cc -DX=1 -c lib.c\"}]";
+  check((dir.path / "cc.json").string());
+}
+
+TEST_CASE("c: a definition the parser loses to unbalanced braces still makes the function compiled") {
+  TempDir dir;
+  // curl's Curl_http_output_auth: the real definition has braces that differ between #if branches,
+  // so only the #else stub is parsed; calls from other files must not look conditional on `!X`.
+  dir.write("lib.c",
+            "#ifndef X\n"
+            "int f(int a,\n"
+            "      int b)\n"
+            "{\n"
+            "#ifdef P\n"
+            "  if(a) {\n"
+            "#else\n"
+            "  if(b) {\n"
+            "#endif\n"
+            "    a++;\n"
+            "  }\n"
+            "  return a;\n"
+            "}\n"
+            "#else\n"
+            "int f(int a,\n"
+            "      int b) { return 0; }\n"
+            "#endif\n");
+  dir.write("main.c", "int f(int a, int b);\nint main(void) { return f(1, 2); }\n");
+  const optum::Graph g = optum::extract_c_files(dir.path, {"lib.c", "main.c"});
+  const optum::Edge* e = find_call(g, "c:main.c#main", "c:lib.c#f");
+  REQUIRE(e);
+  CHECK(e->confidence == optum::Confidence::Exact);
+  CHECK_FALSE(e->attrs.value("inactive", false));
+}

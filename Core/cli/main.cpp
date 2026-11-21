@@ -160,11 +160,12 @@ void require_exists(const std::string& path, const char* what) {
 }
 
 std::vector<std::unique_ptr<optum::Frontend>> make_frontends(const std::vector<std::string>& adapters,
-                                                            unsigned threads, int timeout_s) {
+                                                            unsigned threads, int timeout_s,
+                                                            const std::string& compile_commands) {
   std::vector<std::unique_ptr<optum::Frontend>> out;
   out.push_back(optum::make_python_frontend(threads));
   out.push_back(optum::make_js_frontend(threads));
-  out.push_back(optum::make_c_frontend(threads));
+  out.push_back(optum::make_c_frontend(threads, compile_commands));
   out.push_back(optum::make_binary_frontend());
   for (const auto& cmd : adapters) {
     out.push_back(optum::make_external_frontend(cmd, std::chrono::seconds(timeout_s)));
@@ -174,8 +175,8 @@ std::vector<std::unique_ptr<optum::Frontend>> make_frontends(const std::vector<s
 
 // Runs every frontend (and adapter) over a path and merges the graphs; progress on stderr.
 optum::Graph build_graph(const std::string& path, const std::vector<std::string>& adapters, unsigned threads,
-                         int adapter_timeout, bool quiet) {
-  const auto frontends = make_frontends(adapters, threads, adapter_timeout);
+                         int adapter_timeout, bool quiet, const std::string& compile_commands) {
+  const auto frontends = make_frontends(adapters, threads, adapter_timeout, compile_commands);
   const optum::Discovery d = optum::discover(path);
   optum::Graph g;
   g.source = path;
@@ -253,6 +254,13 @@ int main(int argc, char** argv) {
   add_view_options(graph, view);
   std::vector<std::string> adapters;
   int adapter_timeout = 300;
+  std::string compile_commands;
+  auto add_build_option = [&](CLI::App* cmd) {
+    cmd->add_option("--compile-commands", compile_commands,
+                    "C: the build's compile_commands.json (-D/-U, -I dirs, forced headers, file list); "
+                    "default: the one at the root or in build/; 'none' ignores any");
+  };
+  add_build_option(graph);
   auto add_adapter_options = [&](CLI::App* cmd) {
     cmd->add_option("--adapter", adapters, "External frontend command (repeatable); see docs/protocol.md");
     cmd->add_option("--adapter-timeout", adapter_timeout, "Seconds an adapter may take per request")
@@ -317,6 +325,7 @@ int main(int argc, char** argv) {
   diag->add_option("-f,--format", diag_format, "markdown or json")->check(CLI::IsMember({"markdown", "json"}))->capture_default_str();
   diag->add_option("-o,--out", out_path, "Output file (default: stdout)");
   diag->add_option("-j,--threads", threads, "Worker threads; 0 = all cores");
+  add_build_option(diag);
   diag->add_flag("-q,--quiet", quiet, "Don't print progress to stderr");
   add_adapter_options(diag);
 
@@ -365,6 +374,7 @@ int main(int argc, char** argv) {
   model_cmd->add_option("-j,--threads", threads, "Worker threads; 0 = all cores");
   model_cmd->add_flag("-q,--quiet", quiet, "Don't print progress to stderr");
   add_adapter_options(model_cmd);
+  add_build_option(model_cmd);
 
   std::string disasm_path;
   auto* disasm_cmd = app.add_subcommand("disasm", "Research aid: an ELF binary's functions and instructions, as JSON");
@@ -384,7 +394,7 @@ int main(int argc, char** argv) {
         return 2;
       }
       view_options(view);  // fail on a bad --edges before the (possibly long) analysis
-      const optum::Graph g = build_graph(path, adapters, threads, adapter_timeout, quiet);
+      const optum::Graph g = build_graph(path, adapters, threads, adapter_timeout, quiet, compile_commands);
       return emit(g, view, out_path, indent);
     }
     if (*infer_cmd) {
@@ -418,7 +428,7 @@ int main(int argc, char** argv) {
       require_exists(model_path, "directory");
       require_exists(model_deployment, "file");
       if (!model_recordings.empty()) require_exists(model_recordings, "folder");
-      const optum::Graph g = build_graph(model_path, adapters, threads, adapter_timeout, true);
+      const optum::Graph g = build_graph(model_path, adapters, threads, adapter_timeout, true, compile_commands);
       const optum::Diagnosis d = optum::diagnose(g, model_path);
       optum::ModelInputs mi;
       mi.graph = &g;
@@ -441,7 +451,7 @@ int main(int argc, char** argv) {
       return 0;
     }
     if (*frontends_cmd) {
-      const auto frontends = make_frontends(adapters, 0, adapter_timeout);
+      const auto frontends = make_frontends(adapters, 0, adapter_timeout, "");
       std::optional<optum::Discovery> d;
       if (!list_path.empty()) {
         require_exists(list_path, "file or directory");
@@ -491,7 +501,7 @@ int main(int argc, char** argv) {
         std::cerr << "optum: no such file or directory: " << diag_path << " (check the path)\n";
         return 2;
       }
-      const optum::Graph g = diag_graph.empty() ? build_graph(diag_path, adapters, threads, adapter_timeout, quiet)
+      const optum::Graph g = diag_graph.empty() ? build_graph(diag_path, adapters, threads, adapter_timeout, quiet, compile_commands)
                                                 : load(diag_graph);
       // The source, for analyses that read it (duplicated logic): the directory, or where a
       // saved graph says it came from.

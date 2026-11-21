@@ -150,7 +150,7 @@ a header is a node of the header.
 | Code | Edge |
 |---|---|
 | File defines function | `defines` |
-| `#include "x.h"` / `<x.h>` | `imports`: next to the including file, from the root, or a unique project file ending in it. C and POSIX system headers give no edge; others become `third_party` modules |
+| `#include "x.h"` / `<x.h>` | `imports`, found the compiler's way: next to the including file (quoted only), the build's `-iquote` / `-I` / `-isystem` directories, from the root, and without a build the conventional `include/`, `inc/`, `src/`, `lib/`; last, for a quoted include, a unique project file ending in it inside the includer's own tree (never into `deps/`, `vendor/`, `third_party/`...). `<x.h>` never matches by file name alone, so a vendored `assert.h` doesn't replace libc's. C and POSIX system headers give no edge; others become `third_party` modules |
 | `f()` | `calls`, resolved like the linker: the same file, then headers it includes (also through other headers), then a unique non-`static` definition. That last case is `exact` only if the caller sees a prototype for `f`; otherwise `inferred`, `attrs.via: "name_only"`, since it may belong to another program in the repo |
 | `MACRO(...)` naming a function-like macro of the project | `calls` to the project functions its body calls, followed through nested macros; `attrs.via: "macro"`. Every `#define` of the macro counts (`#ifdef X / #define M ... / #else / #define M ...`), each with its own `#if` |
 | `f()` where `#define f g` is in force | `calls` to `g`. The edge to a function `f`, if there is one, is `inferred`, `attrs.inactive`, `attrs.condition: "!defined(f)"` |
@@ -175,8 +175,15 @@ Each `#if` is then evaluated per translation unit (a `.c` file and the headers i
 three-valued logic: on, off or unknown. Unknown counts as on, so an edge is only demoted when the
 `#if` is known to be off.
 
-- `compile_commands.json` at the root or in `build/`, if there is one: the `-D` / `-U` flags each
-  file is compiled with come first.
+- The build's `compile_commands.json` comes first: `--compile-commands FILE` (also on `diagnose`), else
+  the one at the root or in `build/` (`--compile-commands none` ignores any). From it, per file: `-D` / `-U`,
+  `-include` headers, `-I` / `-iquote` / `-isystem` directories (relative to the entry's `directory`;
+  they may lie outside the root, where a build puts a generated `config.h`, which is read for its
+  `#define`s and has no node), and the file list: a file in the build links only to definitions that
+  are in it. Without a database names no visible file defines are taken as off, which is a guess:
+  the frontend reports `conditions on N names defined by no visible file were assumed off: M edges
+  conditional; pass --compile-commands ...` on stderr, and the affected modules carry
+  `attrs.assumed_off_names`.
 - A name the project `#define`s is defined when one of the `#define`s the translation unit can
   see is in a branch that's on. While that's decided the name counts as not yet defined, so
   include guards and `#ifndef X / #define X default` hold.

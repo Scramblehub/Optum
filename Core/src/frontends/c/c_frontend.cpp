@@ -100,7 +100,74 @@ struct ModuleInfo {
   c_pp::Conditions pp;  // the #if structure; the `cond` fields above index pp.conds
   // -DNAME[=value] (nullopt: -UNAME) from compile_commands.json, if it compiles this file.
   std::unordered_map<std::string, std::optional<std::string>> flags;
+  // The build's include directories for this file, in search order (absolute, normalised):
+  // `quote_only` ones (-iquote) serve "x.h" includes only.
+  struct IncDir {
+    std::string path;
+    bool quote_only = false;
+  };
+  std::vector<IncDir> inc_dirs;
+  std::vector<std::string> forced_includes;  // -include FILE
+  // `#define f_c f` where `f_c` is a function defined here: f -> (cond of f_c's definition, cond of the #define).
+  std::unordered_map<std::string, std::vector<std::pair<int, int>>> renames;
+  // Definitions of functions the parser lost to error recovery (braces that differ between `#if`
+  // branches), by name: the #if condition of each. Enough to know the function is compiled.
+  std::unordered_map<std::string, std::vector<int>> missed_defs;
+  bool in_build = false;    // the file is in the compilation database
+  bool external = false;    // read from outside the root (a generated header): defines, no nodes
 };
+
+// A /* comment */ in the middle of a #define (in a continued body, or with more text after it)
+// makes the parser lose the macro body and the lines after it. Blank those comments out, keeping
+// every byte offset and line: a comment that spans lines becomes a backslash-continued stretch of
+// spaces. Comments after the whole directive, and in other directives, parse fine and stay.
+void blank_directive_comments(std::string& s) {
+  bool define = false, continued = false, line_start = true;
+  for (std::size_t i = 0; i < s.size(); ++i) {
+    const char c = s[i];
+    if (c == '\n') {
+      const bool cont = i > 0 && (s[i - 1] == '\\' || (s[i - 1] == '\r' && i > 1 && s[i - 2] == '\\'));
+      if (!cont) define = continued = false;
+      else continued = true;
+      line_start = true;
+      continue;
+    }
+    if (line_start && (c == ' ' || c == '\t')) continue;
+    if (line_start && c == '#') {
+      std::size_t k = i + 1;
+      while (k < s.size() && (s[k] == ' ' || s[k] == '\t')) ++k;
+      define = s.compare(k, 6, "define") == 0;
+    }
+    line_start = false;
+    if (c == '"' || c == '\'') {  // string / char literal: no comments in it
+      for (++i; i < s.size() && s[i] != c && s[i] != '\n'; ++i) {
+        if (s[i] == '\\' && i + 1 < s.size() && s[i + 1] != '\n') ++i;
+      }
+      if (i < s.size() && s[i] == '\n') --i;
+    } else if (c == '/' && i + 1 < s.size() && s[i + 1] == '/') {
+      while (i < s.size() && (s[i] != '\n' || s[i - 1] == '\\')) ++i;
+      if (i < s.size()) --i;
+    } else if (c == '/' && i + 1 < s.size() && s[i + 1] == '*') {
+      const std::size_t end = s.find("*/", i + 2);
+      const std::size_t stop = end == std::string::npos ? s.size() : end + 2;
+      if (define) {
+        // What follows the comment on its line: nothing, a backslash, or more of the macro?
+        std::size_t k = stop;
+        while (k < s.size() && (s[k] == ' ' || s[k] == '\t' || s[k] == '\r')) ++k;
+        const bool spans = s.find('\n', i) < stop;
+        const bool more = k < s.size() && s[k] != '\n';  // includes a continuation backslash
+        if (continued || more) {
+          for (std::size_t j = i; j < stop; ++j) {
+            if (s[j] == '\n') s[j - 1] = '\\';
+            else if (s[j] != '\r') s[j] = ' ';
+          }
+          if (spans) continued = true;
+        }
+      }
+      i = stop - 1;
+    }
+  }
+}
 
 // ===================================================================== pass 1
 
@@ -110,6 +177,7 @@ class Summarizer {
   void run(TSNode root) {
     m_.pp = c_pp::scan(src_);
     walk(root, -1);
+    find_missed_definitions();
   }
 
  private:
@@ -122,6 +190,7 @@ class Summarizer {
   // The identifier a declarator declares, through pointers, arrays, parentheses and functions.
   TSNode declared(TSNode d) const {
     while (!ts_node_is_null(d) && !ts::is(d, "identifier")) {
+      if (const TSNode name = parenthesised_name(d); !ts_node_is_null(name)) return name;
       if (ts::is(d, "parenthesized_declarator")) d = ts_node_named_child(d, 0);
       else {
         const TSNode inner = ts::field(d, "declarator");
@@ -130,6 +199,30 @@ class Summarizer {
       }
     }
     return d;
+  }
+
+  // `LUA_API int (lua_settop) (lua_State *L, int idx)` after an unknown macro reads as a function
+  // `int` taking one parameter of type `lua_settop`, called with the real parameters. The name is
+  // that "type": `(NAME)` with nothing else in it, behind a function declarator.
+  static TSNode parenthesised_name(TSNode d) {
+    if (!ts::is(d, "function_declarator")) return TSNode{};
+    // `LUALIB_API lua_Integer luaL_len (...)`: two macros/types before the name; the parser takes the
+    // first as the declarator and the name as a stray identifier before the parameters.
+    TSNode stray{};
+    ts::for_named(d, [&](TSNode c) {
+      if (ts::is(c, "ERROR") && ts_node_named_child_count(c) == 1 && ts::is(ts_node_named_child(c, 0), "identifier")) {
+        stray = ts_node_named_child(c, 0);
+      }
+    });
+    if (!ts_node_is_null(stray) && ts::is(ts::field(d, "declarator"), "identifier")) return stray;
+    const TSNode inner = ts::field(d, "declarator");
+    if (!ts::is(inner, "function_declarator") || !ts::is(ts::field(inner, "declarator"), "identifier")) return TSNode{};
+    const TSNode params = ts::field(inner, "parameters");
+    if (ts_node_is_null(params) || ts_node_named_child_count(params) != 1) return TSNode{};
+    const TSNode p = ts_node_named_child(params, 0);
+    if (!ts::is(p, "parameter_declaration") || !ts_node_is_null(ts::field(p, "declarator"))) return TSNode{};
+    const TSNode type = ts::field(p, "type");
+    return ts::is(type, "type_identifier") ? type : TSNode{};
   }
 
   TSNode function_declarator(TSNode d) const {
@@ -146,6 +239,69 @@ class Summarizer {
     return s;
   }
 
+  // `#ifndef X / int f(..) { #ifdef P / if(a) { / #else / if(b) { / #endif ... } / #else / int f(..) {..} #endif`:
+  // the real definition has unbalanced braces across branches, the parser drops it, and only the other
+  // branch's `f` is left. A definition that starts a line (type, name, `(`..`)`, then `{`), outside every
+  // function found, of a name that is defined elsewhere in the file: recorded with its #if condition.
+  void find_missed_definitions() {
+    if (m_.funcs.empty()) return;
+    std::unordered_set<std::string> names;
+    std::vector<char> covered;
+    for (const Func& f : m_.funcs) {
+      names.insert(f.name);
+      if (covered.size() <= f.end_line) covered.resize(std::size_t(f.end_line) + 1, 0);
+      for (std::uint32_t l = f.line; l <= f.end_line; ++l) covered[l] = 1;
+    }
+    std::uint32_t line = 0;
+    for (std::size_t i = 0; i < src_.size();) {
+      ++line;
+      std::size_t eol = src_.find('\n', i);
+      if (eol == std::string_view::npos) eol = src_.size();
+      const bool is_covered = line < covered.size() && covered[line];
+      const char c0 = src_[i];
+      if (!is_covered && (std::isalpha(static_cast<unsigned char>(c0)) || c0 == '_')) {
+        const std::size_t paren = src_.find('(', i);
+        if (paren != std::string_view::npos && paren < eol) {
+          std::size_t e = paren;
+          while (e > i && (src_[e - 1] == ' ' || src_[e - 1] == '\t')) --e;
+          std::size_t b = e;
+          while (b > i && (std::isalnum(static_cast<unsigned char>(src_[b - 1])) || src_[b - 1] == '_')) --b;
+          // A type (or `static`...) comes first: the name isn't the line's first word.
+          if (b > i && e > b && names.count(std::string(src_.substr(b, e - b)))) {
+            int depth = 0;
+            std::size_t k = paren;
+            for (; k < src_.size() && k < paren + 4000; ++k) {
+              if (src_[k] == '(') ++depth;
+              else if (src_[k] == ')' && --depth == 0) break;
+            }
+            if (k < src_.size() && depth == 0) {
+              ++k;
+              while (k < src_.size() && std::isspace(static_cast<unsigned char>(src_[k]))) ++k;
+              if (k < src_.size() && src_[k] == '{') {
+                m_.missed_defs[std::string(src_.substr(b, e - b))].push_back(m_.pp.at(line));
+              }
+            }
+          }
+        }
+      }
+      i = eol + 1;
+    }
+  }
+
+  // An identifier on a directive line (`#ifdef NAME` inside an initializer list, which the parser
+  // reads as an expression: `{ #ifdef NAME "x", ...`) is a condition's name, not a value.
+  bool on_directive_line(TSNode n) const {
+    std::size_t i = ts_node_start_byte(n);
+    while (i > 0 && src_[i - 1] != '\n') --i;
+    // A backslash-continued directive: its first line.
+    while (i >= 2 && (src_[i - 2] == '\\' || (i >= 3 && src_[i - 2] == '\r' && src_[i - 3] == '\\'))) {
+      i -= src_[i - 2] == '\r' ? 3 : 2;
+      while (i > 0 && src_[i - 1] != '\n') --i;
+    }
+    while (i < src_.size() && (src_[i] == ' ' || src_[i] == '\t')) ++i;
+    return i < src_.size() && src_[i] == '#';
+  }
+
   void walk(TSNode n, int f) {
     const frontends::DepthGuard guard(depth_);
     if (guard.too_deep()) return;
@@ -153,6 +309,7 @@ class Summarizer {
     if (t == "function_definition") return on_function(n, f);
     if (t == "declaration") return on_declaration(n, f);
     if (t == "call_expression") return on_call(n, f);
+    if (t == "ERROR" && f < 0) on_misparsed_prototype(n);
     if (t == "preproc_include") return on_include(n);
     if (t == "preproc_def") return on_define(n);
     if (t == "preproc_function_def") return on_macro(n);
@@ -162,7 +319,7 @@ class Summarizer {
       return on_conditional(n, f);
     }
     if (t == "identifier") {
-      m_.address_taken.insert(text(n));  // a name used as a value (filtered to functions later)
+      if (!on_directive_line(n)) m_.address_taken.insert(text(n));  // a name used as a value (filtered to functions later)
       return;
     }
     if (t == "parameter_list" || t == "type_definition" ||
@@ -176,6 +333,14 @@ class Summarizer {
     const TSNode decl = ts::field(n, "declarator");
     const TSNode fd = function_declarator(decl);
     const TSNode id = declared(decl);
+    // `vmcase(OP_X) { ... }` in a function body is a statement macro with a block, read as a
+    // definition: `NAME` is its "type" and `(args)` its whole declarator. Its body is the enclosing one's.
+    TSNode top = decl;
+    while (ts::is(top, "pointer_declarator")) top = ts::field(top, "declarator");
+    if (f >= 0 && ts::is(top, "parenthesized_declarator")) {
+      walk(ts::field(n, "body"), f);
+      return;
+    }
     if (ts_node_is_null(id)) return;
     static const std::unordered_set<std::string> kKeywords = {
         "if", "else", "while", "for", "do", "switch", "case", "return", "sizeof", "goto", "break", "continue",
@@ -208,6 +373,16 @@ class Summarizer {
     m_.funcs.push_back(std::move(fn));
     const int idx = static_cast<int>(m_.funcs.size()) - 1;
     walk(ts::field(n, "body"), idx);
+  }
+
+  // `int f(x) ATTR((warn_unused_result));` at file scope: the trailing attribute macro makes the
+  // parser give up on the declaration, but the function declarator in it is intact.
+  void on_misparsed_prototype(TSNode n) {
+    ts::for_named(n, [&](TSNode c) {
+      if (!ts::is(c, "function_declarator")) return;
+      const TSNode id = declared(c);
+      if (!ts_node_is_null(id)) m_.prototypes.insert(text(id));
+    });
   }
 
   void on_declaration(TSNode n, int f) {
@@ -449,13 +624,36 @@ struct FnRef {
 class Project {
  public:
   std::vector<ModuleInfo> mods;
+  std::string root_abs_;  // the root, absolute, to turn build include paths into project paths
+  std::vector<ModuleInfo::IncDir> global_dirs_;  // the build's include dirs, for files it doesn't list
+  bool has_db = false;
+
+  void index_paths() {
+    for (int i = 0; i < static_cast<int>(mods.size()); ++i) add_path(i);
+  }
+  void add_module(ModuleInfo m) {
+    mods.push_back(std::move(m));
+    add_path(static_cast<int>(mods.size()) - 1);
+  }
 
   void index() {
-    for (int i = 0; i < static_cast<int>(mods.size()); ++i) by_path_.emplace(mods[std::size_t(i)].path, i);
+    for (ModuleInfo& m : mods) {
+      for (const Func& fn : m.funcs) {
+        const auto it = m.defs.find(fn.name);
+        if (it == m.defs.end()) continue;
+        for (const MacroDef& d : it->second) {
+          if (!d.function_like && !d.value.empty()) m.renames[d.value].emplace_back(fn.cond, d.cond);
+        }
+      }
+    }
     for (int m = 0; m < static_cast<int>(mods.size()); ++m) {
       for (int f = 0; f < static_cast<int>(mods[std::size_t(m)].funcs.size()); ++f) {
         const Func& fn = mods[std::size_t(m)].funcs[std::size_t(f)];
-        if (!fn.is_static) globals_[fn.name].push_back({m, f});
+        if (fn.is_static || mods[std::size_t(m)].external) continue;
+        // `#if X / f() {..} / #else / f() {..} / #endif`: one function, whichever branch is compiled.
+        auto& defs = globals_[fn.name];
+        const bool again = std::any_of(defs.begin(), defs.end(), [&](const FnRef& r) { return r.mod == m; });
+        if (!again) defs.push_back({m, f});
       }
     }
     for (const ModuleInfo& mod : mods) {
@@ -463,7 +661,6 @@ class Project {
       if (!mod.path.ends_with(".c")) {
         for (const auto& [name, d] : mod.defs) defined_in_header_.insert(name);
       }
-      used_in_code_.insert(mod.address_taken.begin(), mod.address_taken.end());  // every name used as a value
     }
     // Resolved includes, then each file's headers seen through includes of includes.
     includes_.resize(mods.size());
@@ -473,6 +670,21 @@ class Project {
       }
     }
     visible_.resize(mods.size());
+    // A file in the build sees its headers' includes the way its own flags find them: a header
+    // included from two files with different -I dirs reaches different files (a generated config.h).
+    std::map<std::pair<int, std::string>, std::vector<int>> in_context;  // (header, dirs) -> its includes
+    auto includes_in = [&](int h, const ModuleInfo& tu) -> const std::vector<int>& {
+      if (tu.inc_dirs.empty()) return includes_[std::size_t(h)];
+      std::string sig;
+      for (const auto& d : tu.inc_dirs) sig += d.path + (d.quote_only ? "?q\n" : "\n");
+      auto [it, fresh] = in_context.try_emplace({h, sig});
+      if (fresh) {
+        for (const Include& inc : mods[std::size_t(h)].includes) {
+          if (const int k = resolve_include(h, inc, &tu.inc_dirs); k >= 0 && k != h) it->second.push_back(k);
+        }
+      }
+      return it->second;
+    };
     for (int m = 0; m < static_cast<int>(mods.size()); ++m) {
       std::vector<int> todo = includes_[std::size_t(m)];
       std::unordered_set<int> seen{m};
@@ -481,7 +693,7 @@ class Project {
         todo.pop_back();
         if (!seen.insert(h).second) continue;
         visible_[std::size_t(m)].push_back(h);
-        for (int k : includes_[std::size_t(h)]) todo.push_back(k);
+        for (int k : includes_in(h, mods[std::size_t(m)])) todo.push_back(k);
       }
     }
     // Functions whose address is taken: statics only where named, others anywhere.
@@ -503,21 +715,80 @@ class Project {
   std::string id(int mod) const { return "c:" + mods[std::size_t(mod)].path; }
   std::string id(FnRef r) const { return id(r.mod) + "#" + fn(r).name; }
 
-  int resolve_include(int from, const Include& inc) const {
-    const fs::path dir = fs::path(mods[std::size_t(from)].path).parent_path();
+  // Where `#include` finds a file, in the compiler's order: the includer's directory ("quoted" only),
+  // the build's -iquote / -I / -isystem directories, and without any of those the project's
+  // conventional include roots. <system> headers never match by file name alone: a vendored
+  // deps/x/assert.h must not stand in for libc's. As a last resort a "quoted" include matches a
+  // unique file by its trailing path, but only inside the includer's own tree (not a vendored one).
+  int resolve_include(int from, const Include& inc, const std::vector<ModuleInfo::IncDir>* tu_dirs = nullptr) const {
+    const ModuleInfo& m = mods[std::size_t(from)];
+    if (fs::path(inc.spec).is_absolute()) return lookup(fs::path(inc.spec));
     if (!inc.system) {
-      if (auto it = by_path_.find((dir / inc.spec).lexically_normal().generic_string()); it != by_path_.end()) return it->second;
+      if (const int h = lookup(fs::path(m.path).parent_path() / inc.spec); h >= 0) return h;
     }
-    if (auto it = by_path_.find(fs::path(inc.spec).lexically_normal().generic_string()); it != by_path_.end()) return it->second;
-    // Found through an include directory we don't know: a unique project file ending in it.
+    const auto& dirs = tu_dirs ? *tu_dirs : m.inc_dirs.empty() ? global_dirs_ : m.inc_dirs;
+    for (const ModuleInfo::IncDir& d : dirs) {
+      if (inc.system && d.quote_only) continue;
+      if (const int h = lookup(fs::path(d.path) / inc.spec); h >= 0) return h;
+    }
+    if (!inc.system) {
+      if (const int h = lookup(fs::path(inc.spec)); h >= 0) return h;
+    }
+    if (dirs.empty()) {  // no build information: the usual places
+      for (const char* dir : {"", "include", "inc", "src", "lib", "source"}) {
+        if (const int h = lookup(fs::path(dir) / inc.spec); h >= 0) return h;
+      }
+    }
+    if (inc.system) return -1;
     int hit = -1;
-    for (const auto& [path, i] : by_path_) {
-      if (path.size() > inc.spec.size() && path.ends_with("/" + inc.spec)) {
+    const auto it = by_name_.find(fs::path(inc.spec).filename().generic_string());
+    if (it == by_name_.end()) return -1;
+    const std::string suffix = "/" + fs::path(inc.spec).lexically_normal().generic_string();
+    for (int i : it->second) {
+      const std::string& path = mods[std::size_t(i)].path;
+      if (path.size() > suffix.size() && path.ends_with(suffix) && tree_of(path) == tree_of(m.path)) {
         if (hit >= 0) return -1;
         hit = i;
       }
     }
     return hit;
+  }
+
+  void add_path(int i) {
+    by_path_.emplace(mods[std::size_t(i)].path, i);
+    by_name_[fs::path(mods[std::size_t(i)].path).filename().generic_string()].push_back(i);
+  }
+
+  // The module at a path (absolute, or relative to the root), -1 if it isn't one.
+  int lookup(const fs::path& p) const {
+    std::string key = p.lexically_normal().generic_string();
+    if (p.is_absolute()) {
+      if (const auto it = by_path_.find(key); it != by_path_.end()) return it->second;
+    }
+    if (p.is_absolute() && key.size() > root_abs_.size() && key.starts_with(root_abs_) && key[root_abs_.size()] == '/') {
+      key = key.substr(root_abs_.size() + 1);
+    }
+    const auto it = by_path_.find(key);
+    return it == by_path_.end() ? -1 : it->second;
+  }
+
+  // A vendored tree: the directory after deps/, vendor/, third_party/ ... ("" for the project's own).
+  static std::string tree_of(const std::string& path) {
+    static const std::unordered_set<std::string> kVendor = {"deps", "vendor", "vendored", "third_party", "thirdparty",
+                                                            "3rdparty", "external", "extern", "node_modules"};
+    std::string prefix;
+    std::size_t start = 0;
+    bool next = false;
+    while (start < path.size()) {
+      const std::size_t slash = path.find('/', start);
+      if (slash == std::string::npos) break;  // the file name
+      const std::string part = path.substr(start, slash - start);
+      prefix += part + "/";
+      if (next) return prefix;
+      if (kVendor.count(part)) next = true;
+      start = slash + 1;
+    }
+    return next ? prefix : std::string();
   }
 
   // Like the linker: this file, then headers it includes, then a unique external definition
@@ -536,6 +807,16 @@ class Project {
     }
     auto it = globals_.find(name);
     if (it == globals_.end()) return {};
+    // With a compilation database, a file in the build links only against definitions that are in it
+    // (a libc name defined by os390-syscalls.c, a function in the win/ tree: not in this build).
+    std::vector<FnRef> cands = it->second;
+    if (has_db && mods[std::size_t(m)].in_build) {
+      cands.clear();
+      for (const FnRef& r : it->second) {
+        if (mods[std::size_t(r.mod)].in_build || !mods[std::size_t(r.mod)].path.ends_with(".c")) cands.push_back(r);
+      }
+      if (cands.empty()) return {};
+    }
     // A definition elsewhere counts as found only if this file can see a prototype for it;
     // otherwise it may belong to another program in the same repo (examples/, contrib/).
     bool proto = mods[std::size_t(m)].prototypes.count(name) > 0;
@@ -544,11 +825,11 @@ class Project {
       r.declared = proto;
       return r;
     };
-    if (it->second.size() == 1) return with(it->second[0]);
+    if (cands.size() == 1) return with(cands[0]);
     const fs::path dir = fs::path(mods[std::size_t(m)].path).parent_path();
     FnRef same_dir;
     int count = 0;
-    for (const FnRef& r : it->second) {
+    for (const FnRef& r : cands) {
       if (fs::path(mods[std::size_t(r.mod)].path).parent_path() == dir) {
         same_dir = r;
         ++count;
@@ -588,7 +869,15 @@ class Project {
     return out;
   }
   bool defined_in_header(const std::string& name) const { return defined_in_header_.count(name) > 0; }
-  bool used_in_code(const std::string& name) const { return used_in_code_.count(name) > 0; }
+  // Module m, or a header it sees, uses `name` as a value (a file outside this translation unit, like
+  // a test program that prints config names, says nothing about where the name comes from).
+  bool used_in_code(int m, const std::string& name) const {
+    if (mods[std::size_t(m)].address_taken.count(name)) return true;
+    for (int h : visible_[std::size_t(m)]) {
+      if (mods[std::size_t(h)].address_taken.count(name)) return true;
+    }
+    return false;
+  }
   // Module m, or a header it sees, includes <header>.
   bool sees_system_header(int m, const std::string& header) const {
     auto has = [&](int mod) {
@@ -639,8 +928,9 @@ class Project {
 
  private:
   std::unordered_map<std::string, int> by_path_;
+  std::unordered_map<std::string, std::vector<int>> by_name_;
   std::unordered_map<std::string, std::vector<FnRef>> globals_;
-  std::unordered_set<std::string> defined_in_header_, used_in_code_;
+  std::unordered_set<std::string> defined_in_header_;
   std::vector<std::vector<int>> includes_, visible_;
   std::vector<FnRef> address_taken_;
 };
@@ -664,6 +954,9 @@ using c_pp::Tri;
 class Config {
  public:
   explicit Config(const Project& p) : p_(p) {}
+
+  // Names that no visible file defines and no flag mentions, taken as off without the build's say.
+  const std::unordered_set<std::string>& assumed_off() const { return assumed_off_; }
 
   // Whether `cond` of module `mod` (an index in its conds) is compiled in translation unit `ctx`.
   Tri active(int ctx, int mod, int cond) {
@@ -690,10 +983,12 @@ class Config {
 
  private:
   const Project& p_;
+  std::unordered_set<std::string> assumed_off_;
   std::vector<std::string> busy_;     // names whose #defines are being decided
   std::vector<std::string> assumed_;  // names that count as undefined for now
   std::map<std::tuple<int, int, int>, Tri> memo_active_;
   std::map<std::pair<int, std::string>, Tri> memo_defined_;
+  std::map<std::pair<int, const c_pp::Branch*>, Tri> memo_branch_;
   int steps_ = 0;
   static constexpr int kMaxSteps = 20000;  // per top-level question; past it, unknown
 
@@ -707,6 +1002,18 @@ class Config {
   }
 
   Tri branch(int ctx, const c_pp::Branch& b) {
+    // At the top level (nothing assumed, nothing being decided) a branch's value is the same every
+    // time: the outer #if of many inner ones is asked for once.
+    const bool top = busy_.empty() && assumed_.empty();
+    if (top) {
+      if (auto it = memo_branch_.find({ctx, &b}); it != memo_branch_.end()) return it->second;
+    }
+    const Tri r = branch_value(ctx, b);
+    if (top && steps_ <= kMaxSteps) memo_branch_[{ctx, &b}] = r;
+    return r;
+  }
+
+  Tri branch_value(int ctx, const c_pp::Branch& b) {
     const std::size_t mark = assumed_.size();
     assumed_.insert(assumed_.end(), b.self.begin(), b.self.end());
     Tri r = Tri::True;
@@ -783,7 +1090,8 @@ class Config {
     if (defs.empty()) {
       if (const auto known = host(n)) r = *known;
       else if (const char* h = std_header(n)) r = p_.sees_system_header(ctx, h) ? Tri::True : Tri::Unknown;
-      else if (p_.defined_in_header(n) || p_.used_in_code(n)) r = Tri::Unknown;  // in a header we don't see, or a system one
+      else if (p_.defined_in_header(n) || p_.used_in_code(ctx, n)) r = Tri::Unknown;  // in a header we don't see, or a system one
+      else if (!p_.mods[std::size_t(ctx)].in_build) assumed_off_.insert(n);  // no build information: a guess
     } else {
       busy_.push_back(n);
       assumed_.push_back(n);
@@ -856,7 +1164,10 @@ class Linker {
  public:
   Linker(const Project& p, int m) : p_(p), m_(m), mod_(p.mods[std::size_t(m)]) {}
 
+  const std::unordered_set<std::string>& assumed_off() const { return cfg_.assumed_off(); }
+
   std::vector<EdgeOut> run() {
+    if (mod_.external) return {};
     for (int f = 0; f < static_cast<int>(mod_.funcs.size()); ++f) {
       emit(p_.id(m_), p_.id(FnRef{m_, f}), EdgeKind::Defines, Confidence::Exact, mod_.funcs[std::size_t(f)].line);
     }
@@ -904,7 +1215,7 @@ class Linker {
 
   void on_include(const Include& inc) {
     if (const int h = p_.resolve_include(m_, inc); h >= 0) {
-      if (h != m_) emit(p_.id(m_), p_.id(h), EdgeKind::Imports, Confidence::Exact, inc.line);
+      if (h != m_ && !p_.mods[std::size_t(h)].external) emit(p_.id(m_), p_.id(h), EdgeKind::Imports, Confidence::Exact, inc.line);
       return;
     }
     if (is_system_header(inc.spec)) return;
@@ -940,6 +1251,17 @@ class Linker {
   }
   void exclude(Off& off, int mod, int cond) const { exclude(off, p_.mods[std::size_t(mod)].pp.conds[std::size_t(cond)].text); }
 
+  // A function of module `mod` is renamed `name` by an object-like #define in a compiled branch.
+  bool renamed_to(int mod, int ctx, const std::string& name) {
+    const auto& by_value = p_.mods[std::size_t(mod)].renames;
+    const auto it = by_value.find(name);
+    if (it == by_value.end()) return false;
+    for (const auto& [fn_cond, def_cond] : it->second) {
+      if (cfg_.active(ctx, mod, fn_cond) != Tri::False && cfg_.active(ctx, mod, def_cond) == Tri::True) return true;
+    }
+    return false;
+  }
+
   // Returns false if the function's definition isn't compiled in the default configuration.
   bool emit_call(const CallSite& cs, FnRef r, bool via_macro, Off off) {
     const Func& f = p_.fn(r);
@@ -950,6 +1272,15 @@ class Linker {
     for (const Func& other : p_.mods[std::size_t(r.mod)].funcs) {
       if (!compiled && other.name == f.name) compiled = cfg_.active(ctx, r.mod, other.cond) != Tri::False;
     }
+    if (!compiled) {
+      const auto& missed = p_.mods[std::size_t(r.mod)].missed_defs;
+      if (const auto it = missed.find(f.name); it != missed.end()) {
+        for (int c : it->second) compiled = compiled || cfg_.active(ctx, r.mod, c) != Tri::False;
+      }
+    }
+    // `#if !defined(X) / #define f_c f / #endif` with `int f_c(...) {...}` below: in this configuration
+    // the compiled function f_c is named f, whatever a `#if X` branch defines as f.
+    if (!compiled) compiled = renamed_to(r.mod, ctx, f.name);
     if (!compiled) exclude(off, r.mod, f.cond);
     const char* via = via_macro ? (r.declared ? "macro" : "macro_name_only") : (r.declared ? nullptr : "name_only");
     nlohmann::json a = attrs_for(cs, via);
@@ -1121,26 +1452,48 @@ std::vector<std::string> split_command(const std::string& cmd) {
   return out;
 }
 
-// compile_commands.json at the root or in build/: the -D and -U flags each file is compiled
-// with, by path relative to the root. Empty if there's none (the default configuration then).
-std::unordered_map<std::string, Flags> read_compile_flags(const fs::path& root) {
-  std::unordered_map<std::string, Flags> out;
-  for (const char* name : {"compile_commands.json", "build/compile_commands.json"}) {
+// What a compilation database says about one file.
+struct BuildEntry {
+  Flags flags;                              // -D / -U
+  std::vector<ModuleInfo::IncDir> dirs;     // -iquote, -I, -isystem, -idirafter, in search order
+  std::vector<std::string> forced;          // -include
+};
+
+struct Build {
+  bool found = false;
+  std::unordered_map<std::string, BuildEntry> files;  // by path relative to the root
+  std::vector<ModuleInfo::IncDir> all_dirs;           // every directory, first seen first
+};
+
+// The compilation database: `db` if given ("none": ignore any), else compile_commands.json at the root
+// or in build/. Per file: its -D / -U flags, include directories (relative ones against the entry's
+// "directory"; they may lie outside the root, where a build puts generated headers) and forced
+// headers. Files outside the root are left out.
+Build read_build(const fs::path& root, const std::string& db_arg) {
+  Build out;
+  if (db_arg == "none") return out;
+  std::vector<fs::path> candidates;
+  if (!db_arg.empty()) candidates = {fs::path(db_arg)};
+  else candidates = {root / "compile_commands.json", root / "build/compile_commands.json"};
+  for (const fs::path& db : candidates) {
     std::error_code ec;
-    const fs::path db = root / name;
     if (!fs::is_regular_file(db, ec)) continue;
     const nlohmann::json j = nlohmann::json::parse(read_file(db), nullptr, false);
     if (!j.is_array()) return out;
+    out.found = true;
     const fs::path base = fs::weakly_canonical(root, ec);
     auto str = [](const nlohmann::json& e, const char* key) {
       auto it = e.find(key);
       return it != e.end() && it->is_string() ? it->get<std::string>() : std::string();
     };
+    std::unordered_set<std::string> seen_dirs;
     for (const nlohmann::json& e : j) {
       if (!e.is_object()) continue;
       fs::path file = str(e, "file");
       if (file.empty()) continue;
-      if (file.is_relative()) file = fs::path(str(e, "directory")) / file;
+      fs::path directory = str(e, "directory");
+      if (directory.is_relative()) directory = db.parent_path() / directory;
+      if (file.is_relative()) file = directory / file;
       const fs::path rel = fs::weakly_canonical(file, ec).lexically_relative(base);
       if (ec || rel.empty() || *rel.begin() == "..") continue;
       std::vector<std::string> args;
@@ -1151,17 +1504,52 @@ std::unordered_map<std::string, Flags> read_compile_flags(const fs::path& root) 
       } else {
         args = split_command(str(e, "command"));
       }
-      Flags& flags = out[rel.generic_string()];
+      BuildEntry& entry = out.files[rel.generic_string()];
+      std::vector<std::string> quote, plain, system, after;
+      auto absolute = [&](const std::string& d) {
+        fs::path p = d;
+        if (p.is_relative()) p = directory / p;
+        std::error_code ec2;
+        return fs::weakly_canonical(p, ec2).generic_string();
+      };
       for (std::size_t i = 0; i < args.size(); ++i) {
-        const bool def = args[i].starts_with("-D"), undef = args[i].starts_with("-U");
-        if (!def && !undef) continue;
-        std::string v = args[i].substr(2);
-        if (v.empty() && i + 1 < args.size()) v = args[++i];
-        const std::size_t eq = v.find('=');
-        const std::string macro = v.substr(0, eq);
-        if (macro.empty()) continue;
-        if (undef) flags[macro] = std::nullopt;
-        else flags[macro] = eq == std::string::npos ? "1" : v.substr(eq + 1);
+        const std::string& a = args[i];
+        // `-Xvalue` or `-X value`
+        auto value = [&](const char* flag) -> std::optional<std::string> {
+          const std::size_t n = std::strlen(flag);
+          if (a.compare(0, n, flag) != 0) return std::nullopt;
+          if (a.size() > n) return a.substr(n);
+          if (i + 1 < args.size()) return args[++i];
+          return std::nullopt;
+        };
+        if (a.starts_with("-iquote")) {
+          if (auto v = value("-iquote")) quote.push_back(absolute(*v));
+        } else if (a.starts_with("-isystem")) {
+          if (auto v = value("-isystem")) system.push_back(absolute(*v));
+        } else if (a.starts_with("-idirafter")) {
+          if (auto v = value("-idirafter")) after.push_back(absolute(*v));
+        } else if (a == "-include" || a == "--include") {
+          if (i + 1 < args.size()) entry.forced.push_back(absolute(args[++i]));
+        } else if (a.starts_with("-I")) {
+          if (auto v = value("-I")) plain.push_back(absolute(*v));
+        } else if (a.starts_with("-D") || a.starts_with("-U")) {
+          const bool undef = a[1] == 'U';
+          std::string v = a.substr(2);
+          if (v.empty() && i + 1 < args.size()) v = args[++i];
+          const std::size_t eq = v.find('=');
+          const std::string macro = v.substr(0, eq);
+          if (macro.empty()) continue;
+          if (undef) entry.flags[macro] = std::nullopt;
+          else entry.flags[macro] = eq == std::string::npos ? "1" : v.substr(eq + 1);
+        }
+      }
+      entry.dirs.clear();
+      for (const auto& d : quote) entry.dirs.push_back({d, true});
+      for (const auto* list : {&plain, &system, &after}) {
+        for (const auto& d : *list) entry.dirs.push_back({d, false});
+      }
+      for (const auto& d : entry.dirs) {
+        if (seen_dirs.insert(d.path + (d.quote_only ? "?q" : "")).second) out.all_dirs.push_back(d);
       }
     }
     return out;
@@ -1169,9 +1557,30 @@ std::unordered_map<std::string, Flags> read_compile_flags(const fs::path& root) 
   return out;
 }
 
+// Reads and summarises one file.
+void parse_module(ModuleInfo& m, TSParser* parser, const fs::path& file) {
+  bool readable = true;
+  std::string src = read_file(file, &readable);
+  blank_directive_comments(src);
+  m.unreadable = !readable;
+  m.lines = static_cast<std::size_t>(std::count(src.begin(), src.end(), '\n'));
+  ts::TreePtr tree(ts_parser_parse_string(parser, nullptr, src.data(), static_cast<uint32_t>(src.size())));
+  const TSNode rootn = ts_tree_root_node(tree.get());
+  m.syntax_error = ts_node_has_error(rootn);
+  Summarizer(m, src).run(rootn);
+  {  // test files count separately (attrs.referenced_by_tests)
+    static const std::unordered_set<std::string_view> names = {"identifier"}, strings = {"string_content"},
+                                                       text = {"preproc_arg"};
+    static const frontends::DefFields defs = {{"function_declarator", "declarator"}};
+    m.test_file = is_test_code(m.path);
+    frontends::count_name_uses(rootn, src, names, strings, defs, m.names, text);
+  }
+}
+
 }  // namespace
 
-Graph extract_c_files(const fs::path& root, const std::vector<fs::path>& rel_files, CStats* stats, unsigned threads) {
+Graph extract_c_files(const fs::path& root, const std::vector<fs::path>& rel_files, CStats* stats, unsigned threads,
+                       const std::string& compile_commands) {
   std::vector<fs::path> files;
   for (const auto& f : rel_files) {
     if (f.extension() == ".c" || f.extension() == ".h") files.push_back(f);
@@ -1188,22 +1597,63 @@ Graph extract_c_files(const fs::path& root, const std::vector<fs::path>& rel_fil
     }();
     ModuleInfo& m = project.mods[i];
     m.path = files[i].generic_string();
-    bool readable = true;
-    const std::string src = read_file(root / files[i], &readable);
-    m.unreadable = !readable;
-    m.lines = static_cast<std::size_t>(std::count(src.begin(), src.end(), '\n'));
-    ts::TreePtr tree(ts_parser_parse_string(parser.get(), nullptr, src.data(), static_cast<uint32_t>(src.size())));
-    const TSNode rootn = ts_tree_root_node(tree.get());
-    m.syntax_error = ts_node_has_error(rootn);
-    Summarizer(m, src).run(rootn);
-    {  // test files count separately (attrs.referenced_by_tests)
-      static const std::unordered_set<std::string_view> names = {"identifier"}, strings = {"string_content"},
-                                                         text = {"preproc_arg"};
-      static const frontends::DefFields defs = {{"function_declarator", "declarator"}};
-      m.test_file = is_test_code(m.path);
-      frontends::count_name_uses(rootn, src, names, strings, defs, m.names, text);
-    }
+    parse_module(m, parser.get(), root / files[i]);
   });
+  // The build: its flags, include directories and file list; headers it generates outside the root.
+  const Build build = read_build(root, compile_commands);
+  std::error_code root_ec;
+  project.root_abs_ = fs::weakly_canonical(root, root_ec).generic_string();
+  project.has_db = build.found;
+  project.global_dirs_ = build.all_dirs;
+  for (ModuleInfo& m : project.mods) {
+    if (auto it = build.files.find(m.path); it != build.files.end()) {
+      m.flags = it->second.flags;
+      m.inc_dirs = it->second.dirs;
+      m.in_build = true;
+      for (const std::string& f : it->second.forced) m.includes.insert(m.includes.begin(), Include{f, false, 0});
+    }
+  }
+  project.index_paths();
+  if (build.found) {
+    ts::ParserPtr parser(ts_parser_new());
+    ts_parser_set_language(parser.get(), tree_sitter_c());
+    for (std::size_t i = 0; i < project.mods.size(); ++i) {  // the list grows as headers are found
+      const std::vector<Include> includes = project.mods[i].includes;
+      const std::vector<ModuleInfo::IncDir> dirs =
+          project.mods[i].inc_dirs.empty() ? project.global_dirs_ : project.mods[i].inc_dirs;
+      const bool shared = project.mods[i].inc_dirs.empty();  // a header: any file's flags may reach it
+      for (const Include& inc : includes) {
+        if (!shared && project.resolve_include(static_cast<int>(i), inc) >= 0) continue;
+        std::vector<fs::path> cands;
+        if (fs::path(inc.spec).is_absolute()) cands.push_back(inc.spec);
+        else {
+          if (!inc.system) cands.push_back(fs::path(project.mods[i].path).parent_path() / inc.spec);
+          for (const ModuleInfo::IncDir& d : dirs) {
+            if (!(inc.system && d.quote_only)) cands.push_back(fs::path(d.path) / inc.spec);
+          }
+        }
+        for (const fs::path& c : cands) {
+          const std::string key = c.lexically_normal().generic_string();
+          std::error_code ec;
+          if (!c.is_absolute() || !fs::is_regular_file(c, ec)) continue;
+          if (project.lookup(c) >= 0) {  // already a module (inside the root, or loaded)
+            if (shared) continue;
+            break;
+          }
+          ModuleInfo ext;
+          ext.path = key;
+          ext.external = true;
+          ext.inc_dirs = project.mods[i].inc_dirs;
+          parse_module(ext, parser.get(), c);
+          ext.names = {};
+          ext.funcs.clear();
+          ext.calls.clear();
+          project.add_module(std::move(ext));
+          if (!shared) break;
+        }
+      }
+    }
+  }
   frontends::NameUses uses, test_uses;
   {
     // Included files the frontend doesn't parse (generated .inc tables, .def lists): their names
@@ -1232,26 +1682,49 @@ Graph extract_c_files(const fs::path& root, const std::vector<fs::path>& rel_fil
     frontends::finalize_name_uses(uses, names);
     frontends::finalize_name_uses(test_uses, std::move(names));
   }
-  auto flags = read_compile_flags(root);
-  for (ModuleInfo& m : project.mods) {
-    if (auto it = flags.find(m.path); it != flags.end()) m.flags = std::move(it->second);
-  }
   project.index();
 
   std::vector<std::vector<EdgeOut>> edges(project.mods.size());
-  parallel_for(project.mods.size(), threads,
-               [&](std::size_t i) { edges[i] = Linker(project, static_cast<int>(i)).run(); });
+  std::vector<std::size_t> assumed_names(project.mods.size(), 0), assumed_edges(project.mods.size(), 0);
+  std::vector<std::vector<std::string>> assumed_list(project.mods.size());
+  parallel_for(project.mods.size(), threads, [&](std::size_t i) {
+    Linker linker(project, static_cast<int>(i));
+    edges[i] = linker.run();
+    const auto& names = linker.assumed_off();
+    if (names.empty()) return;
+    assumed_names[i] = names.size();
+    assumed_list[i].assign(names.begin(), names.end());
+    // Conditional edges whose condition names one of them.
+    for (const EdgeOut& e : edges[i]) {
+      if (e.kind != EdgeKind::Calls || !e.attrs.value("inactive", false)) continue;
+      const std::string cond = e.attrs.value("condition", "");
+      bool hit = false;
+      for (std::size_t k = 0; k < cond.size() && !hit;) {
+        if (std::isalpha(static_cast<unsigned char>(cond[k])) || cond[k] == '_') {
+          std::size_t j = k;
+          while (j < cond.size() && (std::isalnum(static_cast<unsigned char>(cond[j])) || cond[j] == '_')) ++j;
+          hit = names.count(cond.substr(k, j - k)) > 0;
+          k = j;
+        } else {
+          ++k;
+        }
+      }
+      if (hit) ++assumed_edges[i];
+    }
+  });
 
   Graph g;
   g.source = root.string();
   for (int mi = 0; mi < static_cast<int>(project.mods.size()); ++mi) {
     const ModuleInfo& m = project.mods[std::size_t(mi)];
+    if (m.external) continue;
     Node mod;
     mod.id = project.id(mi);
     mod.kind = NodeKind::Module;
     mod.name = fs::path(m.path).filename().string();
     mod.loc = SourceLoc{m.path, 1, static_cast<std::uint32_t>(m.lines), std::nullopt};
     mod.frontend = "c";
+    if (assumed_names[std::size_t(mi)]) mod.attrs["assumed_off_names"] = assumed_names[std::size_t(mi)];
     g.add_node(std::move(mod));
     for (int f = 0; f < static_cast<int>(m.funcs.size()); ++f) {
       const Func& fn = m.funcs[std::size_t(f)];
@@ -1287,8 +1760,19 @@ Graph extract_c_files(const fs::path& root, const std::vector<fs::path>& rel_fil
     }
   }
   if (stats) {
-    stats->files = project.mods.size();
+    stats->files = 0;
+    stats->build_database = build.found;
+    stats->build_files = build.files.size();
+    std::unordered_set<std::string> all_names;
+    for (std::size_t i = 0; i < project.mods.size(); ++i) {
+      all_names.insert(assumed_list[i].begin(), assumed_list[i].end());
+      stats->assumed_off_edges += assumed_edges[i];
+      if (project.mods[i].external) ++stats->external_headers;
+      else ++stats->files;
+    }
+    stats->assumed_off_names = all_names.size();
     for (const auto& m : project.mods) {
+      if (m.external) continue;
       stats->lines += m.lines;
       stats->files_with_syntax_errors += m.syntax_error ? 1 : 0;
       if (m.unreadable) stats->unreadable.push_back(m.path);
