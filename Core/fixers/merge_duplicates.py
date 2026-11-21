@@ -84,7 +84,9 @@ def body_dump(fn):
     if body and isinstance(body[0], ast.Expr) and isinstance(getattr(body[0], "value", None), ast.Constant) \
             and isinstance(body[0].value.value, str):
         body = body[1:]
-    return ast.dump(ast.Module(body=body, type_ignores=[])) + ast.dump(fn.args) + str(isinstance(fn, ast.AsyncFunctionDef))
+    returns = ast.dump(fn.returns) if fn.returns is not None else ""  # `-> int` vs `-> str` is a different function
+    return (ast.dump(ast.Module(body=body, type_ignores=[])) + ast.dump(fn.args) + returns +
+            str(isinstance(fn, ast.AsyncFunctionDef)))
 
 
 def globals_used(source, fn):
@@ -177,6 +179,18 @@ def reaches(start, target, load, added=None):
                 return True
             todo.append(imp)
     return False
+
+
+def read_source(path):
+    """(the text with LF line ends, and whether the file used CRLF): a file keeps its line endings."""
+    with open(path, encoding="utf-8", newline="") as f:
+        raw = f.read()
+    return raw.replace("\r\n", "\n"), "\r\n" in raw
+
+
+def write_source(path, text, crlf):
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(text.replace("\n", "\r\n") if crlf else text)
 
 
 def run_tests(cmd, cwd):
@@ -383,9 +397,10 @@ def main():
 
     # Rewrite: per file, bottom up so line numbers stay valid; imports go after the file's last
     # top-level import.
-    new_text = {}
+    new_text, crlf = {}, {}
     for path in sorted({m["file"] for m in merges}):
-        lines = open(path, encoding="utf-8").read().split("\n")
+        original, crlf[path] = read_source(path)
+        lines = original.split("\n")
         for m in sorted((m for m in merges if m["file"] == path), key=lambda m: -m["start"]):
             replacement = [m["line"]] if m["line"] is not None else [m["deleted_note"]]
             lines[m["start"] - 1: m["end"]] = replacement
@@ -394,7 +409,7 @@ def main():
             if m["file"] == path:
                 needed += [i for i in m["imports"] if i not in needed]
         if needed:
-            tree = ast.parse(open(path, encoding="utf-8").read())
+            tree = ast.parse(original)
             after = 0
             for node in tree.body:
                 if isinstance(node, (ast.Import, ast.ImportFrom)):
@@ -419,7 +434,7 @@ def main():
 
     report = {"merged": merges, "refused": refused, "applied": False, "tests": None}
     for path, text in new_text.items():
-        old = open(path, encoding="utf-8").read()
+        old = read_source(path)[0]
         sys.stdout.writelines(difflib.unified_diff(old.splitlines(True), text.splitlines(True),
                                                    os.path.relpath(path, root), os.path.relpath(path, root)))
     for r in refused:
@@ -434,14 +449,18 @@ def main():
                 print("tests fail before the change: nothing applied", file=sys.stderr)
                 write_report(args.report, report)
                 sys.exit(1)
-        backup = {p: open(p, encoding="utf-8").read() for p in new_text}
+        backup = {}  # the exact bytes: a restore must leave every file as it was
+        for p in new_text:
+            with open(p, "rb") as f:
+                backup[p] = f.read()
         for p, t in new_text.items():
-            open(p, "w", encoding="utf-8").write(t)
+            write_source(p, t, crlf[p])
         if args.test:
             ok, log = run_tests(args.test, root)
             if not ok:
-                for p, t in backup.items():
-                    open(p, "w", encoding="utf-8").write(t)
+                for p, data in backup.items():
+                    with open(p, "wb") as f:
+                        f.write(data)
                 report["tests"] = {"before": True, "after": False, "log": log}
                 print("tests fail after the change: every file restored", file=sys.stderr)
                 write_report(args.report, report)

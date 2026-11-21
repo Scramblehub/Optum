@@ -227,6 +227,15 @@ if(Python3_FOUND)
                      --work ${CMAKE_CURRENT_BINARY_DIR}/fix_${mode})
     set_tests_properties(fix_merge_duplicates_${mode} PROPERTIES TIMEOUT 120)
   endforeach()
+  add_test(NAME fix_merge_duplicates_edges
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_fix_edges.py
+                   --optum $<TARGET_FILE:optum> --sample ${FIXTURES}/fixes/merge_duplicates
+                   --work ${CMAKE_CURRENT_BINARY_DIR}/fix_edges)
+  set_tests_properties(fix_merge_duplicates_edges PROPERTIES TIMEOUT 120)
+  add_test(NAME tracers_edge_cases
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_tracers.py
+                   --work ${CMAKE_CURRENT_BINARY_DIR}/tracer_edges)
+  set_tests_properties(tracers_edge_cases PROPERTIES TIMEOUT 120)
 endif()
 
 # External adapters (docs/protocol.md). Need Python, but not jsonschema.

@@ -64,7 +64,10 @@ def main():
 
     implicit_ids = set(classes.values())
     calls = collections.Counter()
-    for f in glob.glob(os.path.join(args.profiles, "*.cpuprofile")):
+    profiles = sorted(glob.glob(os.path.join(args.profiles, "*.cpuprofile")))
+    if not profiles:
+        ap.error(f"no .cpuprofile files in {args.profiles} (run node with --cpu-prof --cpu-prof-dir {args.profiles})")
+    for f in profiles:
         p = json.load(open(f))
         by_id = {n["id"]: n for n in p["nodes"]}
         parent = {c: n["id"] for n in p["nodes"] for c in n.get("children", [])}
@@ -85,7 +88,7 @@ def main():
     with open(args.out, "w") as f:
         json.dump({"trace_version": "0.1", "source": root, "language": "javascript",
                    "calls": [{"from": a, "to": b, "count": c} for (a, b), c in sorted(calls.items())]}, f, indent=1)
-    print(f"{len(calls)} distinct calls observed in {len(glob.glob(os.path.join(args.profiles, '*.cpuprofile')))} profiles")
+    print(f"{len(calls)} distinct calls observed in {len(profiles)} profiles")
 
 
 if __name__ == "__main__":

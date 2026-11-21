@@ -39,7 +39,8 @@ central), then the one defined first in its file, then the first by id.
 
 A copy is merged only if all of these hold. Otherwise it is listed as refused, with the reason.
 
-1. **The same code:** equal syntax trees (Python's `ast`; names and docstrings aside), no
+1. **The same code:** equal syntax trees (Python's `ast`; names and docstrings aside; parameters
+   and the return annotation count), no
    decorators, no `global` or `nonlocal`; both functions, or both methods of top-level classes.
    Methods also must not use `super()`, `__class__` or private `__names`: they mean the class the
    code is written in, so a copy elsewhere means something else. In one file, the kept class (or
@@ -60,6 +61,9 @@ A copy is merged only if all of these hold. Otherwise it is listed as refused, w
    fail after, every file is restored.
 
 Without `--apply`, it only prints the diff.
+
+A file keeps its line endings (CRLF stays CRLF), and a restore after a failed test run writes back
+the exact original bytes.
 
 ### What changes for the program
 
@@ -85,6 +89,10 @@ year stays as filed), and a method copy using `super()`.
 | `apply` | 6 merged, 6 refused with the right reasons; each rewrite as expected; the tests pass before, after, and again afterwards |
 | `dry` | the diff is printed and no file changes |
 | `revert` | a test the merge breaks (`__name__`) fails after the change, and every file is restored |
+
+[check_fix_edges.py](../tests/tools/check_fix_edges.py) adds what the sample doesn't cover: two
+functions differing only in their return annotation are not the same code, and a CRLF project keeps
+its line endings through a merge and is restored byte for byte after a failed one.
 
 On the Python standard library (a dry run), it merges nothing and refuses all 8 exact copies,
 correctly. Six are methods (not handled yet). `posixpath.abspath` and `ntpath._abspath_fallback`

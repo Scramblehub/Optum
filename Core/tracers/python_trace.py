@@ -27,6 +27,7 @@ import os
 import re
 import runpy
 import sys
+import threading
 
 
 def package_base(root):
@@ -145,6 +146,7 @@ def main():
     sys.argv = target if target else [args.module] + target
     sys.path.insert(0, os.path.dirname(main_file) if main_file else os.getcwd())
     sys.setprofile(profile)
+    threading.setprofile(profile)  # threads the program starts (sys.setprofile covers only this one)
     status = 0
     try:
         if args.module:
@@ -152,9 +154,18 @@ def main():
         else:
             runpy.run_path(main_file, run_name="__main__")
     except SystemExit as e:
-        status = e.code if isinstance(e.code, int) else 0
+        # As Python itself exits: None is success, an int its own status, anything else is printed
+        # and means failure.
+        if e.code is None:
+            status = 0
+        elif isinstance(e.code, int):
+            status = e.code
+        else:
+            print(e.code, file=sys.stderr)
+            status = 1
     finally:
         sys.setprofile(None)
+        threading.setprofile(None)
         with open(args.out, "w") as f:
             json.dump({"trace_version": "0.1", "source": root, "language": "python",
                        "calls": [{"from": a, "to": b, "count": n} for (a, b), n in sorted(calls.items())]}, f, indent=1)
