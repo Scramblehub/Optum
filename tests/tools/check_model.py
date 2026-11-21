@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """optum model on the test company against its answer key (tests/fixtures/model/expected.json):
 each component's replaceability class, the reasons that matter (what only the webhook does, who
-covers the n8n flow, the same invoice fields), weakest-evidence confidence, and staleness when a
-source file changes.
+covers the n8n flow, the same invoice fields), weakest-evidence confidence, the workflow (orders as
+cases, linked across systems), and staleness when a source file changes.
 
     check_model.py OPTUM_BINARY PYTHON"""
 import json
@@ -48,6 +48,19 @@ with tempfile.TemporaryDirectory() as d:
     cart = comps["n8n:abandoned-cart-reminder"]["replaceability"]
     check(cart["confidence"] == "recorded" and "never ran" in cart["reason"], "the cart flow never ran (recorded)")
     check("anyone needs it" in comps["py:vip_report"]["replaceability"]["reason"], "the report: unknown, and why")
+
+    # Workflows: the orders as cases, each order's steps in time order, linked across systems.
+    w = m["workflows"]
+    check(w["case"] == "shop orders" and w["cases"] == 2, f"two orders as cases, got {w.get('case')} {w.get('cases')}")
+    paths = [v["steps"] for v in w["variants"]]
+    want_n8n = ["driver: set status pending", "js:payments_webhook.js: set status processing",
+                "n8n:orders-to-accounting: create account.move", "n8n:orders-to-accounting: action_post account.move",
+                "n8n:orders-to-accounting: set status completed"]
+    want_script = [s.replace("n8n:orders-to-accounting", "py:nightly_sync") for s in want_n8n]
+    check(sorted(paths) == sorted([want_n8n, want_script]), f"the two orders' paths: {paths}")
+    check(set(w["linked_by"]) == {"own id", "linked record", "text mentioning the order (weaker)"},
+          f"links: own ids, the invoice by its ref, posting by the invoice's id; got {w['linked_by']}")
+    check(all(t["median_seconds"] >= 0 for t in w["transitions"]), "timings on every transition")
 
     # Staleness: change one source file; exactly the conclusions resting on it go stale.
     fresh = subprocess.run([OPTUM, "model", "--check", out], capture_output=True, text=True)
