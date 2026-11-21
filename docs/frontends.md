@@ -111,7 +111,7 @@ path from the analysed root, then `#` and the dotted name inside the file.
 | Nested function | `function` | `js:app.js#report.fmt` |
 | Class | `data_type` | `js:shapes.ts#Square` |
 | Method, constructor, class field holding a function | `function` | `js:shapes.ts#Square.area`, `#Square.constructor` |
-| Static method | `function`; its id is `Class.name`, or `Class.static.name` when the class also has an instance member of that name (so `static lex()` and `lex()` stay apart) | `js:marked.js#Lexer.static.lex` |
+| Static method | `function`; its id is always `Class.static.name`, so `static lex()` and `lex()` stay apart, and adding an instance `lex()` later doesn't change the static's id | `js:marked.js#Lexer.static.lex` |
 | Symbol-keyed method `[kRun]() {}` (key an identifier or `Symbol.x`) | `function` named by the key, brackets kept; `this[kRun]()` calls it. Other computed keys aren't nodes | `js:yargs.js#YargsInstance.[kRun]` |
 | Getter / setter | `function`, `attrs.accessor: "get"` / `"set"` | `js:lib/npm.js#Npm.flatOptions` |
 | npm package | `module`, `attrs.third_party: true` | `js:axios`, `js:@scope/pkg` |

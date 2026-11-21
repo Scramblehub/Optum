@@ -63,9 +63,8 @@ struct Def {
   bool arrow = false;      // arrow functions see the outer `this`
   bool anonymous = false;  // callbacks: a scope, but not a node
   std::string accessor;    // "get" / "set" for getters and setters
-  bool is_static = false;  // class members declared `static`: kept apart from instance members of the same name
+  bool is_static = false;  // class members declared `static`: id Class.static.name, kept apart from instance members
   std::string inner_name;  // classes: `var A = class _A {}` binds _A inside the body
-  std::unordered_set<std::string> instance_names;  // classes: names of its non-static members
   std::uint32_t line = 1, end_line = 1;
   std::optional<Expr> base;  // classes: extends
   std::unordered_map<std::string, int> children;
@@ -172,7 +171,7 @@ class Summarizer {
   }
 
   // Static members are keyed "static:name" in `children`, apart from instance members. Their id is
-  // Class.name, unless the class also has an instance member of that name: then Class.static.name.
+  // always Class.static.name, so it doesn't change when an instance member of that name is added.
   static std::string member_key(const std::string& name, bool is_static) { return is_static ? "static:" + name : name; }
 
   int add_def(TSNode n, std::string name, DefKind kind, int parent, bool arrow, bool anonymous = false,
@@ -186,8 +185,7 @@ class Summarizer {
     int named = parent;
     while (named > 0 && def(named).anonymous) named = def(named).parent;
     const std::string& pq = def(named).qual;
-    const bool apart = is_static && def(parent).instance_names.count(name);
-    d.qual = anonymous ? pq : pq.empty() ? name : pq + (apart ? ".static." : ".") + name;
+    d.qual = anonymous ? pq : pq.empty() ? name : pq + (is_static ? ".static." : ".") + name;
     d.is_static = is_static;
     d.name = std::move(name);
     d.kind = kind;
@@ -274,15 +272,8 @@ class Summarizer {
       walk(c, s, a);
     });
     const TSNode body = ts::field(n, "body");
-    if (ts_node_is_null(body)) return;
-    ts::for_named(body, [&](TSNode m) {
-      if (!ts::is(m, "method_definition") && !ts::is(m, "public_field_definition") && !ts::is(m, "field_definition")) return;
-      if (is_static_member(m)) return;
-      const std::string nm = member_name(m);
-      if (!nm.empty()) def(idx).instance_names.insert(nm);
-    });
     // Field initializers run at construction but read like class-body code: they count for `a`.
-    walk_children(body, idx, a);
+    if (!ts_node_is_null(body)) walk_children(body, idx, a);
   }
 
   static bool is_static_member(TSNode m) {

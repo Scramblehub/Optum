@@ -4,7 +4,7 @@
   "nodes": [
     {"id": "js:cli.js", "kind": "module", "name": "cli.js", "frontend": "js"},
     {"id": "js:cli.js#Cli", "kind": "data_type", "name": "Cli", "frontend": "js"},
-    {"id": "js:cli.js#Cli.load", "kind": "function", "name": "load", "frontend": "js"},
+    {"id": "js:cli.js#Cli.static.load", "kind": "function", "name": "load", "frontend": "js"},
     {"id": "js:cli.js#Cli.run", "kind": "function", "name": "run", "frontend": "js"},
     {"id": "js:cli.js#normalize", "kind": "function", "name": "normalize", "frontend": "js"},
     {"id": "js:cli.js#byName", "kind": "function", "name": "byName", "frontend": "js"},
@@ -21,11 +21,11 @@
   ],
   "edges": [
     {"from": "js:cli.js", "to": "js:cli.js#Cli", "kind": "defines"},
-    {"from": "js:cli.js#Cli", "to": "js:cli.js#Cli.load", "kind": "defines"},
+    {"from": "js:cli.js#Cli", "to": "js:cli.js#Cli.static.load", "kind": "defines"},
     {"from": "js:cli.js#Cli", "to": "js:cli.js#Cli.run", "kind": "defines"},
     {"from": "js:cli.js", "to": "js:cli.js#normalize", "kind": "defines"},
     {"from": "js:cli.js", "to": "js:cli.js#byName", "kind": "defines"},
-    {"from": "js:cli.js#Cli.run", "to": "js:cli.js#Cli.load", "kind": "calls"},
+    {"from": "js:cli.js#Cli.run", "to": "js:cli.js#Cli.static.load", "kind": "calls"},
     {"from": "js:cli.js#Cli.run", "to": "js:commands/base.js#BaseCommand", "kind": "calls"},
     {"from": "js:cli.js#Cli.run", "to": "js:commands/bye.js#Bye", "kind": "calls"},
     {"from": "js:cli.js#Cli.run", "to": "js:commands/hello.js#Hello", "kind": "calls"},

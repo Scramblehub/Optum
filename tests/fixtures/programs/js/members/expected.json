@@ -13,7 +13,7 @@
     {"id": "js:members.js#Lexer.lex", "kind": "function", "name": "lex", "frontend": "js"},
     {"id": "js:members.js#Lexer.scan", "kind": "function", "name": "scan", "frontend": "js"},
     {"id": "js:members.js#Parser", "kind": "data_type", "name": "Parser", "frontend": "js"},
-    {"id": "js:members.js#Parser.parse", "kind": "function", "name": "parse", "frontend": "js"},
+    {"id": "js:members.js#Parser.static.parse", "kind": "function", "name": "parse", "frontend": "js"},
     {"id": "js:members.js#Parser.run", "kind": "function", "name": "run", "frontend": "js"},
     {"id": "js:members.js#format", "kind": "function", "name": "format", "frontend": "js"},
     {"id": "js:members.js#shutdown", "kind": "function", "name": "shutdown", "frontend": "js"},
@@ -30,7 +30,7 @@
     {"from": "js:members.js#Lexer", "to": "js:members.js#Lexer.lex", "kind": "defines"},
     {"from": "js:members.js#Lexer", "to": "js:members.js#Lexer.scan", "kind": "defines"},
     {"from": "js:members.js", "to": "js:members.js#Parser", "kind": "defines"},
-    {"from": "js:members.js#Parser", "to": "js:members.js#Parser.parse", "kind": "defines"},
+    {"from": "js:members.js#Parser", "to": "js:members.js#Parser.static.parse", "kind": "defines"},
     {"from": "js:members.js#Parser", "to": "js:members.js#Parser.run", "kind": "defines"},
     {"from": "js:members.js", "to": "js:members.js#format", "kind": "defines"},
     {"from": "js:members.js", "to": "js:members.js#shutdown", "kind": "defines"},
@@ -41,12 +41,12 @@
     {"from": "js:members.js#Lexer.static.lex", "to": "js:members.js#Lexer.lex", "kind": "calls"},
     {"from": "js:members.js#Lexer.static.lex", "to": "js:members.js#Lexer", "kind": "calls"},
     {"from": "js:members.js#Lexer.lex", "to": "js:members.js#Lexer.scan", "kind": "calls"},
-    {"from": "js:members.js#Parser.parse", "to": "js:members.js#Parser.run", "kind": "calls"},
-    {"from": "js:members.js#Parser.parse", "to": "js:members.js#Parser", "kind": "calls"},
+    {"from": "js:members.js#Parser.static.parse", "to": "js:members.js#Parser.run", "kind": "calls"},
+    {"from": "js:members.js#Parser.static.parse", "to": "js:members.js#Parser", "kind": "calls"},
     {"from": "js:members.js#shutdown", "to": "js:members.js#Engine.exit", "kind": "calls"},
     {"from": "js:members.js#main", "to": "js:members.js#Engine.start", "kind": "calls"},
     {"from": "js:members.js#main", "to": "js:members.js#Engine", "kind": "calls"},
-    {"from": "js:members.js#main", "to": "js:members.js#Parser.parse", "kind": "calls"},
+    {"from": "js:members.js#main", "to": "js:members.js#Parser.static.parse", "kind": "calls"},
     {"from": "js:members.js#main", "to": "js:members.js#Lexer.static.lex", "kind": "calls"}
   ]
 }
