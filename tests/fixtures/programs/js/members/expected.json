@@ -17,6 +17,7 @@
     {"id": "js:members.js#Parser.run", "kind": "function", "name": "run", "frontend": "js"},
     {"id": "js:members.js#format", "kind": "function", "name": "format", "frontend": "js"},
     {"id": "js:members.js#shutdown", "kind": "function", "name": "shutdown", "frontend": "js"},
+    {"id": "js:members.js#probe", "kind": "function", "name": "probe", "frontend": "js"},
     {"id": "js:members.js#main", "kind": "function", "name": "main", "frontend": "js"}
   ],
   "edges": [
@@ -34,6 +35,7 @@
     {"from": "js:members.js#Parser", "to": "js:members.js#Parser.run", "kind": "defines"},
     {"from": "js:members.js", "to": "js:members.js#format", "kind": "defines"},
     {"from": "js:members.js", "to": "js:members.js#shutdown", "kind": "defines"},
+    {"from": "js:members.js", "to": "js:members.js#probe", "kind": "defines"},
     {"from": "js:members.js", "to": "js:members.js#main", "kind": "defines"},
     {"from": "js:members.js#Engine.[kRun]", "to": "js:members.js#Engine.[kLog]", "kind": "calls"},
     {"from": "js:members.js#Engine.[kLog]", "to": "js:members.js#format", "kind": "calls"},

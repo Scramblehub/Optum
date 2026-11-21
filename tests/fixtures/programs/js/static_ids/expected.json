@@ -8,6 +8,9 @@
     {"id": "js:statics.js#Parser", "kind": "data_type", "name": "Parser", "frontend": "js"},
     {"id": "js:statics.js#Parser.static.parse", "kind": "function", "name": "parse", "frontend": "js"},
     {"id": "js:statics.js#Parser.static.build", "kind": "function", "name": "build", "frontend": "js"},
+    {"id": "js:statics.js#Sub", "kind": "data_type", "name": "Sub", "frontend": "js"},
+    {"id": "js:statics.js#Sub.static.getUsage", "kind": "function", "name": "getUsage", "frontend": "js"},
+    {"id": "js:statics.js#usage", "kind": "function", "name": "usage", "frontend": "js"},
     {"id": "js:statics.js#clean", "kind": "function", "name": "clean", "frontend": "js"},
     {"id": "js:statics.js#main", "kind": "function", "name": "main", "frontend": "js"}
   ],
@@ -17,11 +20,16 @@
     {"from": "js:statics.js", "to": "js:statics.js#Parser", "kind": "defines"},
     {"from": "js:statics.js#Parser", "to": "js:statics.js#Parser.static.parse", "kind": "defines"},
     {"from": "js:statics.js#Parser", "to": "js:statics.js#Parser.static.build", "kind": "defines"},
+    {"from": "js:statics.js", "to": "js:statics.js#Sub", "kind": "defines"},
+    {"from": "js:statics.js#Sub", "to": "js:statics.js#Sub.static.getUsage", "kind": "defines"},
+    {"from": "js:statics.js", "to": "js:statics.js#usage", "kind": "defines"},
     {"from": "js:statics.js", "to": "js:statics.js#clean", "kind": "defines"},
     {"from": "js:statics.js", "to": "js:statics.js#main", "kind": "defines"},
     {"from": "js:statics.js#Lexer.static.lex", "to": "js:statics.js#clean", "kind": "calls"},
     {"from": "js:statics.js#Parser.static.parse", "to": "js:statics.js#Parser.static.build", "kind": "calls"},
     {"from": "js:statics.js#Parser.static.build", "to": "js:statics.js#clean", "kind": "calls"},
+    {"from": "js:statics.js#Sub.static.getUsage", "to": "js:statics.js#clean", "kind": "calls"},
+    {"from": "js:statics.js#usage", "to": "js:statics.js#Sub.static.getUsage", "kind": "calls"},
     {"from": "js:statics.js#main", "to": "js:statics.js#Parser.static.parse", "kind": "calls"},
     {"from": "js:statics.js#main", "to": "js:statics.js#Lexer.static.lex", "kind": "calls"}
   ]

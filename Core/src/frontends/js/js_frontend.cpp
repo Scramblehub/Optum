@@ -822,7 +822,7 @@ class Project {
       const auto& defs = mods[std::size_t(m)].defs;
       for (int d = 1; d < static_cast<int>(defs.size()); ++d) {
         const Def& df = defs[std::size_t(d)];
-        if (df.kind == DefKind::Function && !df.anonymous && !df.is_static &&
+        if (df.kind == DefKind::Function && !df.anonymous &&
             defs[std::size_t(df.parent)].kind == DefKind::Class) {
           methods_by_name_[df.name].push_back({m, d});
         }

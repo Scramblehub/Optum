@@ -54,9 +54,14 @@ function shutdown(engine) {
   return engine.exit(2)
 }
 
+// `lex` is a static and an instance method: not unique, so x.lex() is not guessed.
+function probe(x) {
+  return x.lex(1)
+}
+
 function main(src) {
   new Engine().start(src)
   return Parser.parse(Lexer.lex(src))
 }
 
-module.exports = { main, shutdown }
+module.exports = { main, shutdown, probe }

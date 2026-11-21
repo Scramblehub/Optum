@@ -16,6 +16,17 @@ class Parser {
   }
 }
 
+class Sub {
+  static getUsage(x) {
+    return clean(x)
+  }
+}
+
+// The class is a parameter, so only the unique name links it: unique_method_name.
+function usage(Cmd, x) {
+  return Cmd.getUsage(x)
+}
+
 function clean(src) {
   return src.trim()
 }
@@ -24,4 +35,4 @@ function main(src) {
   return Parser.parse(Lexer.lex(src))
 }
 
-module.exports = { main }
+module.exports = { main, usage }
