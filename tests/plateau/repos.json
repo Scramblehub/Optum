@@ -1,0 +1,16 @@
+{
+ "about": "Which real repositories each role may be used for (docs/plans/plateau.md). tuning: looked at to find gaps and design fixes. held_out: never looked at while designing a fix; used only to check that a fix generalises. sealed: kept for the final release check, used for nothing else. A repo moves from held_out to tuning only by decision, and is then replaced in held_out.",
+ "python": {
+  "tuning": {"boltons": "d31d821", "click": "08b803c", "marshmallow": "f268f0c", "pyparsing": "810199f", "attrs": "2a1fb86", "more-itertools": "e3f79f4"},
+  "held_out": ["django", "sphinx", "sympy"]
+ },
+ "javascript": {
+  "tuning": {"commander": "a5a7dc0", "semver": "b37b033", "chalk": "7211001", "yargs": "9588a76", "marked": "502e658"},
+  "held_out": ["express", "lodash", "npm"]
+ },
+ "c": {
+  "tuning": {"lua": "c42d820", "zstd": "dca70ea", "libyaml": "0.2.6", "sqlite": "3.49.1", "libuv": "f08538c", "jansson": "851a214", "mbedtls": "v3.6.2"},
+  "held_out": ["curl", "redis"],
+  "sealed": ["lz4", "parson"]
+ }
+}
