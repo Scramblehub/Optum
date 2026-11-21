@@ -30,7 +30,8 @@
   "held_out": [
    "express",
    "lodash",
-   "npm"
+   "koa",
+   "ws"
   ],
   "seen_held_out": {
    "npm": "round 2: showed the static-method unique-name regression; used again to check its fix"
