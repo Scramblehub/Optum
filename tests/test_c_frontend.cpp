@@ -334,3 +334,42 @@ TEST_CASE("c: names on the continuation line of a #if are conditions, not values
   CHECK(e->confidence == optum::Confidence::Inferred);
   CHECK(e->attrs.value("inactive", false));
 }
+
+TEST_CASE("c: a multi-line comment after a whole #define leaves the declarations below it alone") {
+  TempDir dir;
+  dir.write("z.h",
+            "#define LIMIT_DEFAULT 27   /* by default, the decoder will refuse any frame\n"
+            "                           * requiring more memory than this window\n"
+            "                           */\n"
+            "ZLIB_API size_t z_free(void* s);\n");
+  dir.write("z.c", "#include \"z.h\"\nsize_t z_free(void* s) { return 0; }\n");
+  dir.write("u.c", "#include \"z.h\"\nvoid use(void* s) { z_free(s); }\n");
+  const optum::Graph g = optum::extract_c_files(dir.path, {"z.h", "z.c", "u.c"});
+  const optum::Edge* e = find_call(g, "c:u.c#use", "c:z.c#z_free");
+  REQUIRE(e);
+  CHECK(e->confidence == optum::Confidence::Exact);  // declared: not name_only
+}
+
+TEST_CASE("c: a function renamed by a #define in a compiled branch is compiled, whatever an off branch defines") {
+  TempDir dir;
+  // sha256.c: the C version is `process_c`, renamed `process` unless the accelerated version is on.
+  dir.write("sha.c",
+            "#if defined(USE_ACCEL)\n"
+            "#  if !defined(HAVE_NEON)\n"
+            "#    undef USE_ACCEL\n"
+            "#  endif\n"
+            "#endif\n"
+            "#if !defined(USE_ACCEL)\n"
+            "#define process_c process\n"
+            "#endif\n"
+            "int process_c(int *ctx) { return 0; }\n"
+            "#if defined(USE_ACCEL)\n"
+            "int process(int *ctx) { return process_c(ctx); }\n"
+            "#endif\n"
+            "int update(int *ctx) { return process(ctx); }\n");
+  const optum::Graph g = optum::extract_c_files(dir.path, {"sha.c"});
+  const optum::Edge* e = find_call(g, "c:sha.c#update", "c:sha.c#process");
+  REQUIRE(e);
+  CHECK(e->confidence == optum::Confidence::Exact);
+  CHECK_FALSE(e->attrs.value("inactive", false));
+}

@@ -107,19 +107,18 @@ struct ModuleInfo {
 // every byte offset and line: a comment that spans lines becomes a backslash-continued stretch of
 // spaces. Comments after the whole directive, and in other directives, parse fine and stay.
 void blank_directive_comments(std::string& s) {
-  bool directive = false, define = false, continued = false, line_start = true;
+  bool define = false, continued = false, line_start = true;
   for (std::size_t i = 0; i < s.size(); ++i) {
     const char c = s[i];
     if (c == '\n') {
       const bool cont = i > 0 && (s[i - 1] == '\\' || (s[i - 1] == '\r' && i > 1 && s[i - 2] == '\\'));
-      if (!cont) directive = define = continued = false;
+      if (!cont) define = continued = false;
       else continued = true;
       line_start = true;
       continue;
     }
     if (line_start && (c == ' ' || c == '\t')) continue;
     if (line_start && c == '#') {
-      directive = true;
       std::size_t k = i + 1;
       while (k < s.size() && (s[k] == ' ' || s[k] == '\t')) ++k;
       define = s.compare(k, 6, "define") == 0;
@@ -142,7 +141,7 @@ void blank_directive_comments(std::string& s) {
         while (k < s.size() && (s[k] == ' ' || s[k] == '\t' || s[k] == '\r')) ++k;
         const bool spans = s.find('\n', i) < stop;
         const bool more = k < s.size() && s[k] != '\n';  // includes a continuation backslash
-        if (continued || spans || more) {
+        if (continued || more) {
           for (std::size_t j = i; j < stop; ++j) {
             if (s[j] == '\n') s[j - 1] = '\\';
             else if (s[j] != '\r') s[j] = ' ';
@@ -1058,6 +1057,19 @@ class Linker {
   }
   void exclude(Off& off, int mod, int cond) const { exclude(off, p_.mods[std::size_t(mod)].pp.conds[std::size_t(cond)].text); }
 
+  // A function of module `mod` is renamed `name` by an object-like #define in a compiled branch.
+  bool renamed_to(int mod, int ctx, const std::string& name) {
+    const ModuleInfo& m = p_.mods[std::size_t(mod)];
+    for (const Func& fn : m.funcs) {
+      const auto it = m.defs.find(fn.name);
+      if (it == m.defs.end() || cfg_.active(ctx, mod, fn.cond) == Tri::False) continue;
+      for (const MacroDef& d : it->second) {
+        if (!d.function_like && d.value == name && cfg_.active(ctx, mod, d.cond) == Tri::True) return true;
+      }
+    }
+    return false;
+  }
+
   // Returns false if the function's definition isn't compiled in the default configuration.
   bool emit_call(const CallSite& cs, FnRef r, bool via_macro, Off off) {
     const Func& f = p_.fn(r);
@@ -1068,6 +1080,9 @@ class Linker {
     for (const Func& other : p_.mods[std::size_t(r.mod)].funcs) {
       if (!compiled && other.name == f.name) compiled = cfg_.active(ctx, r.mod, other.cond) != Tri::False;
     }
+    // `#if !defined(X) / #define f_c f / #endif` with `int f_c(...) {...}` below: in this configuration
+    // the compiled function f_c is named f, whatever a `#if X` branch defines as f.
+    if (!compiled) compiled = renamed_to(r.mod, ctx, f.name);
     if (!compiled) exclude(off, r.mod, f.cond);
     const char* via = via_macro ? (r.declared ? "macro" : "macro_name_only") : (r.declared ? nullptr : "name_only");
     nlohmann::json a = attrs_for(cs, via);
