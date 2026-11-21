@@ -19,6 +19,8 @@ import urllib.request
 PROXY = "http://127.0.0.1"
 ODOO, ODOO_DB = PROXY + ":8069/jsonrpc", "testco"
 STRIPE = PROXY + ":12111"
+SHOP = PROXY + ":8080/wp-json/wc/v3"
+SHOP_AUTH = "Basic " + base64.b64encode(b"admin:testcoShopApiPassword00").decode()  # fixed test credential (shop/setup.sh)
 MARKER = "testco-loaded"
 
 
@@ -91,6 +93,58 @@ def load_accounting(odoo, data, ids):
           f"(first: {[(m['name'], m['amount_total'], m['state']) for m in totals]})")
 
 
+def shop_api(method, path, payload=None):
+    req = urllib.request.Request(SHOP + path, None if payload is None else json.dumps(payload).encode(), method=method,
+                                 headers={"Authorization": SHOP_AUTH, "Content-Type": "application/json"})
+    return json.loads(urllib.request.urlopen(req, timeout=300).read())
+
+
+def load_shop(data, ids):
+    """Products, the shop's customers and its 2,000 orders, through WooCommerce's REST API."""
+    if shop_api("GET", "/products?sku=SKU-TEE-01"):  # our products are the marker (admin is a "customer" too)
+        print("shop: already loaded")
+        return
+    t = time.time()
+    recs = data["records"]
+    customers = [r for r in recs if r.get("type") is None]
+    orders = [r for r in recs if r.get("type") == "order"]
+    products = {}
+    for o in orders:
+        for li in o["line_items"]:
+            products.setdefault(li["sku"], li)
+    made = shop_api("POST", "/products/batch", {"create": [
+        {"name": p["name"], "sku": sku, "type": "simple", "regular_price": f"{p['unit_cents'] / 100:.2f}"}
+        for sku, p in sorted(products.items())]})["create"]
+    product_id = {p["sku"]: p["id"] for p in made}
+    live = {}
+    for i in range(0, len(customers), 100):
+        batch = customers[i:i + 100]
+        out = shop_api("POST", "/customers/batch", {"create": [
+            {"email": c["email"], "first_name": c["first_name"], "last_name": c["last_name"],
+             "billing": {**c["billing"], "first_name": c["first_name"], "last_name": c["last_name"],
+                         "email": c["email"], "country": "GB"}} for c in batch]})["create"]
+        for c, o in zip(batch, out):
+            if "error" in o:
+                raise RuntimeError(f"customer {c['email']}: {o['error']}")
+            live[c["id"]] = o["id"]
+    ids["shop"] = {str(k): v for k, v in live.items()}
+    by_id = {c["id"]: c for c in customers}
+    for i in range(0, len(orders), 100):
+        batch = orders[i:i + 100]
+        out = shop_api("POST", "/orders/batch", {"create": [{
+            "customer_id": live[o["customer_id"]], "status": "completed", "set_paid": True, "currency": "GBP",
+            "billing": {**by_id[o["customer_id"]]["billing"], "email": by_id[o["customer_id"]]["email"],
+                        "first_name": by_id[o["customer_id"]]["first_name"],
+                        "last_name": by_id[o["customer_id"]]["last_name"], "country": "GB"},
+            "line_items": [{"product_id": product_id[li["sku"]], "quantity": li["quantity"]} for li in o["line_items"]]}
+            for o in batch]})["create"]
+        for o, made_order in zip(batch, out):
+            if "error" in made_order:
+                raise RuntimeError(f"order {o['id']}: {made_order['error']}")
+            ids["shop"][str(o["id"])] = made_order["id"]
+    print(f"shop: {len(made)} products, {len(live)} customers, {len(orders)} orders in {time.time() - t:.0f} s")
+
+
 def load_payments(data, ids):
     """stripe-mock keeps nothing, so 'loading' is the traffic itself: the customers and charges
     the shop's checkout would create, recorded by the proxy."""
@@ -115,13 +169,15 @@ def load_payments(data, ids):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--data", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))
-    ap.add_argument("--tools", default="accounting,payments")
+    ap.add_argument("--tools", default="shop,accounting,payments")
     a = ap.parse_args()
     ids_path = os.path.join(a.data, "ids.json")
     ids = json.load(open(ids_path)) if os.path.exists(ids_path) else {}
     for tool in a.tools.split(","):
         data = json.load(open(os.path.join(a.data, f"{tool}.json")))
-        if tool == "accounting":
+        if tool == "shop":
+            load_shop(data, ids)
+        elif tool == "accounting":
             load_accounting(Odoo(), data, ids)
         elif tool == "payments":
             load_payments(data, ids)

@@ -17,12 +17,13 @@ DIR = os.environ.get("RECORDINGS_DIR", "/recordings")
 class Recorder:
     def __init__(self):
         os.makedirs(DIR, exist_ok=True)
-        self.files = {}
 
-    def _out(self, tool):
-        if tool not in self.files:
-            self.files[tool] = open(os.path.join(DIR, f"{tool}.jsonl"), "a", buffering=1, encoding="utf-8")
-        return self.files[tool]
+    @staticmethod
+    def _write(tool, line):
+        # Opened per write, not kept open: a recording deleted or moved while the proxy runs is
+        # simply started again (a kept-open file would go on writing into the deleted one).
+        with open(os.path.join(DIR, f"{tool}.jsonl"), "a", encoding="utf-8") as f:
+            f.write(line + "\n")
 
     def response(self, flow):
         req, resp = flow.request, flow.response
@@ -37,11 +38,7 @@ class Recorder:
             dict(req.query.items(multi=False)) if req.query else {}, dict(req.headers.items(multi=False)),
             req.get_content(strict=False), req.headers.get("content-type"), resp.status_code,
             dict(resp.headers.items(multi=False)), resp.get_content(strict=False), resp.headers.get("content-type"))
-        self._out(tool).write(json.dumps(rec, ensure_ascii=False) + "\n")
-
-    def done(self):
-        for f in self.files.values():
-            f.close()
+        self._write(tool, json.dumps(rec, ensure_ascii=False))
 
 
 addons = [Recorder()]

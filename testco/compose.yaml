@@ -54,23 +54,70 @@ services:
       interval: 5s
       retries: 30
 
+  # Replaced in stage 7 (last: staff use it all day): the web shop (Shopify's role).
+  shop-db:
+    image: mariadb:11.4
+    environment:
+      MARIADB_DATABASE: wordpress
+      MARIADB_USER: wp
+      MARIADB_PASSWORD: wp
+      MARIADB_ROOT_PASSWORD: root
+    volumes: [shop-db:/var/lib/mysql]
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 3s
+      retries: 40
+
+  shop:
+    image: wordpress:6.7-php8.3-apache
+    depends_on:
+      shop-db: {condition: service_healthy}
+    environment: &shop-env
+      WORDPRESS_DB_HOST: shop-db
+      WORDPRESS_DB_USER: wp
+      WORDPRESS_DB_PASSWORD: wp
+      WORDPRESS_DB_NAME: wordpress
+      # API passwords over plain HTTP are allowed only on a "local" site; this one is.
+      WORDPRESS_CONFIG_EXTRA: |
+        define('WP_ENVIRONMENT_TYPE', 'local');
+        define('WP_HOME', 'http://127.0.0.1:8080');
+        define('WP_SITEURL', 'http://127.0.0.1:8080');
+    volumes: [shop-html:/var/www/html]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs -o /dev/null http://127.0.0.1/wp-includes/images/w-logo-blue.png || exit 1"]
+      interval: 3s
+      retries: 40
+
+  shop-setup:  # one-off: installs WooCommerce and the API credential (shop/setup.sh), then exits
+    image: wordpress:cli-php8.3
+    user: "33:33"
+    depends_on:
+      shop: {condition: service_healthy}
+    environment: *shop-env
+    volumes: [shop-html:/var/www/html, ./shop/setup.sh:/setup.sh:ro]
+    command: ["sh", "/setup.sh"]
+    restart: "no"
+
   # The recording proxy (docs/plans/phase3.md, feat/observe): mitmproxy in reverse mode, one port
   # per tool, recording every exchange with secrets redacted.
   observe:
     image: mitmproxy/mitmproxy:11.1.3
-    depends_on: [payments, accounting, automation]
+    depends_on: [payments, accounting, automation, shop]
     command: >-
-      mitmdump --set block_global=false --set connection_strategy=lazy
+      mitmdump --set block_global=false --set connection_strategy=lazy --set keep_host_header=true
       --mode reverse:http://payments:12111@12111
       --mode reverse:http://accounting:8069@8069
       --mode reverse:http://automation:5678@5678
+      --mode reverse:http://shop:80@8080
       -s /observe/addon.py
     environment:
       RECORDINGS_DIR: /recordings
-    ports: ["127.0.0.1:12111:12111", "127.0.0.1:8069:8069", "127.0.0.1:5678:5678"]
+    ports: ["127.0.0.1:12111:12111", "127.0.0.1:8069:8069", "127.0.0.1:5678:5678", "127.0.0.1:8080:8080"]
     volumes: ["./observe:/observe:ro", "./recordings:/recordings"]
 
 volumes:
+  shop-db:
+  shop-html:
   accounting-db:
   accounting-data:
   automation-data:

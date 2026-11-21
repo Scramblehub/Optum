@@ -13,6 +13,8 @@ import urllib.request
 PAYMENTS = "http://127.0.0.1:12111"
 ACCOUNTING = "http://127.0.0.1:8069"
 AUTOMATION = "http://127.0.0.1:5678"
+SHOP = "http://127.0.0.1:8080/wp-json/wc/v3"
+SHOP_AUTH = "Basic " + base64.b64encode(b"admin:testcoShopApiPassword00").decode()  # fixed test credential
 
 
 def http(method, url, data=None, headers=None, form=False):
@@ -64,8 +66,16 @@ def automation():
     return "healthy"
 
 
+def shop():
+    status, s = http("GET", SHOP + "/settings/general/woocommerce_currency", headers={"Authorization": SHOP_AUTH})
+    assert status == 200 and s["value"] == "GBP", s
+    status, orders = http("GET", SHOP + "/orders?per_page=1", headers={"Authorization": SHOP_AUTH})
+    return f"WooCommerce answers, currency GBP, {'orders loaded' if orders else 'no orders yet'}"
+
+
 if __name__ == "__main__":
     check("payments (stripe-mock)", payments)
     check("accounting (Odoo)", accounting)
     check("automation (n8n)", automation)
+    check("shop (WooCommerce)", shop)
     print("all services answer")
