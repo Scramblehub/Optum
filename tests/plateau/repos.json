@@ -10,10 +10,14 @@
    "more-itertools": "e3f79f4"
   },
   "held_out": [
-   "django",
    "sphinx",
-   "sympy"
-  ]
+   "sympy",
+   "requests",
+   "rich"
+  ],
+  "seen_held_out": {
+   "django": "round 2: showed unique-name edges lost on attribute receivers (obj.query.m()); used again to check the fix"
+  }
  },
  "javascript": {
   "tuning": {

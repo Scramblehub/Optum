@@ -56,7 +56,9 @@ or heavy use of configuration.
 | 1 | none (measurement) | Python 73.1%, JS 76.8% recall; C 69–100% recall, 56–100% precision | not run |
 | 2 | Python: subscripted bases, `cls()`, `__call__`, defaults with arguments, no guessing on stdlib modules; JS: symbol-keyed methods, static/instance ids, class-expression names, `process` builtins; C: in progress. Tracers: Python argv, Sentinel ids, call-site lines; JS skip-level frames set aside | Python 73.7% → 81.0% (same traces), 0 calls lost; JS yargs 78.9% → 88.4%, marked 62.3% → 67.4%, 0 lost | pending |
 
-Round 2's held-out checks: Python pending; JavaScript neutral on express and lodash, a regression
+Round 2's held-out checks: Python better on sphinx (+25 calls) and sympy (+42), 0 lost there, a
+regression on django (unique-name edges lost on `obj.query.m()` receivers; being fixed, then
+checked on django again and on requests and rich, fresh); JavaScript neutral on express and lodash, a regression
 on npm (static methods dropped from unique-name guessing; restored); C better on curl (precision
 79 → 97), mixed on redis: conditions set only by the build (generated config headers, `-D`) were
 judged off, and `<assert.h>` resolved to a vendored file. Fixed by reading `compile_commands.json`
