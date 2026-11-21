@@ -414,6 +414,18 @@ class Summarizer {
     ts::for_named(target, [&](TSNode c) { bind_names(c, ds, nullptr); });
   }
 
+  // s == want, ignoring spaces, tabs, newlines and backslashes in s; stops at the first difference
+  // without copying (a callee can be a whole deep call chain: copying it at every level is quadratic).
+  static bool same_ignoring_spaces(std::string_view s, std::string_view want) {
+    std::size_t j = 0;
+    for (const char c : s) {
+      if (c == ' ' || c == '\t' || c == '\n' || c == '\\') continue;
+      if (j == want.size() || c != want[j]) return false;
+      ++j;
+    }
+    return j == want.size();
+  }
+
   static std::string strip_spaces(std::string s) {
     std::erase_if(s, [](char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\\'; });
     return s;
@@ -494,8 +506,9 @@ class Summarizer {
     } else if (t == "call") {
       // Configuration with a default (os.environ.get("SHOP_URL", "http://...")) means the default:
       // that's the address the code uses unless it's deployed with another.
-      const std::string fn = strip_spaces(text(ts::field(n, "function")));
-      if (fn == "os.environ.get" || fn == "os.getenv" || fn == "environ.get" || fn == "getenv") {
+      const std::string_view fn = ts::text(ts::field(n, "function"), src_);
+      if (same_ignoring_spaces(fn, "os.environ.get") || same_ignoring_spaces(fn, "os.getenv") ||
+          same_ignoring_spaces(fn, "environ.get") || same_ignoring_spaces(fn, "getenv")) {
         const TSNode args = ts::field(n, "arguments");
         int pos = 0;
         TSNode fallback{};

@@ -11,6 +11,8 @@
 #include "optum/export.hpp"
 #include "optum/frontend.hpp"
 #include "optum/frontends/binary.hpp"
+#include "optum/infer.hpp"
+#include "optum/model.hpp"
 #include "optum/ir.hpp"
 #include "optum/score.hpp"
 #include "optum/syntax_tree.hpp"
@@ -340,6 +342,39 @@ int main(int argc, char** argv) {
   verify_cmd->add_flag("--json", verify_json, "Print the report as JSON");
   verify_cmd->add_option("--min-recall", verify_min_recall, "Fail (exit 1) below this recall, 0-1");
 
+  optum::InferOptions infer_opts;
+  std::string infer_out;
+  std::vector<std::string> infer_tools, infer_clients;
+  auto* infer_cmd = app.add_subcommand("infer", "Learn each tool's behaviour from recorded traffic (a spec per tool)");
+  infer_cmd->footer(
+      "Example: optum infer testco/recordings --n8n testco/company/n8n -o specs/\n"
+      "Writes <tool>.spec.json and spec.md per tool, and observed.json (automation flows that never ran).\n"
+      "Recordings: JSON lines from the recording proxy (testco/observe); harness calls are left out.");
+  infer_cmd->add_option("recordings", infer_opts.recordings, "Folder of <tool>.jsonl recordings")->required();
+  infer_cmd->add_option("--n8n", infer_opts.n8n, "Folder of the automation tool's exported flows");
+  infer_cmd->add_option("--tool", infer_tools, "Only this tool (repeatable)");
+  infer_cmd->add_option("--client", infer_clients, "Only calls made by this client (repeatable)");
+  infer_cmd->add_option("-o,--out", infer_out, "Output folder")->required();
+  infer_cmd->add_flag("-q,--quiet", quiet, "Don't print the summary to stderr");
+
+  std::string model_path, model_recordings, model_n8n, model_deployment, model_format = "markdown", model_check;
+  auto* model_cmd = app.add_subcommand("model", "What each component does to which data, and whether it could go");
+  model_cmd->footer(
+      "Example: optum model testco/company --adapter \"python3 Core/adapters/n8n/optum_n8n.py\" \\\n"
+      "           --recordings testco/recordings --n8n testco/company/n8n --deployment testco/deployment.json\n"
+      "         optum model --check model.json       which conclusions rest on inputs that changed since\n"
+      "Plan: docs/plans/capabilities.md. Every conclusion lists its evidence and the inputs it rests on.");
+  model_cmd->add_option("path", model_path, "The company's code (directory)");
+  model_cmd->add_option("--recordings", model_recordings, "Folder of recorded traffic (<tool>.jsonl)");
+  model_cmd->add_option("--n8n", model_n8n, "Folder of the automation tool's exported flows");
+  model_cmd->add_option("--deployment", model_deployment, "What runs where: systems, hosts, clients (JSON)");
+  model_cmd->add_option("--check", model_check, "A saved model (JSON): list conclusions whose inputs changed");
+  model_cmd->add_option("-f,--format", model_format, "markdown or json")->check(CLI::IsMember({"markdown", "json"}))->capture_default_str();
+  model_cmd->add_option("-o,--out", out_path, "Output file (default: stdout)");
+  model_cmd->add_option("-j,--threads", threads, "Worker threads; 0 = all cores");
+  model_cmd->add_flag("-q,--quiet", quiet, "Don't print progress to stderr");
+  add_adapter_options(model_cmd);
+
   std::string disasm_path;
   auto* disasm_cmd = app.add_subcommand("disasm", "Research aid: an ELF binary's functions and instructions, as JSON");
   disasm_cmd->add_option("binary", disasm_path, "x86-64 ELF executable or shared library")->required();
@@ -360,6 +395,50 @@ int main(int argc, char** argv) {
       view_options(view);  // fail on a bad --edges before the (possibly long) analysis
       const optum::Graph g = build_graph(path, adapters, threads, adapter_timeout, quiet, compile_commands);
       return emit(g, view, out_path, indent);
+    }
+    if (*infer_cmd) {
+      infer_opts.tools.insert(infer_tools.begin(), infer_tools.end());
+      infer_opts.clients.insert(infer_clients.begin(), infer_clients.end());
+      if (!infer_opts.n8n.empty()) require_exists(infer_opts.n8n.string(), "folder");
+      const auto r = optum::infer(infer_opts);
+      std::filesystem::create_directories(infer_out);
+      const std::filesystem::path out(infer_out);
+      for (const auto& [tool, spec] : r.specs) write_text(spec.dump(1) + "\n", (out / (tool + ".spec.json")).string());
+      write_text(r.observed.dump(1) + "\n", (out / "observed.json").string());
+      write_text(r.markdown, (out / "spec.md").string());
+      if (!quiet) {
+        std::cerr << r.specs.size() << " tools, " << r.calls << " calls -> " << infer_out << "; "
+                  << r.observed["findings"].size() << " observed finding(s)\n";
+      }
+      return 0;
+    }
+    if (*model_cmd) {
+      if (!model_check.empty()) {
+        std::ifstream in(model_check);
+        if (!in) throw optum::IrError(model_check + ": cannot open");
+        const auto r = optum::check_model(nlohmann::ordered_json::parse(in), std::filesystem::current_path());
+        std::cout << r.dump(indent) << "\n";
+        return r["stale"].empty() ? 0 : 1;
+      }
+      if (model_path.empty() || model_deployment.empty()) {
+        std::cerr << "optum: model needs the code's directory and --deployment (or --check with a saved model)\n";
+        return 2;
+      }
+      require_exists(model_path, "directory");
+      require_exists(model_deployment, "file");
+      if (!model_recordings.empty()) require_exists(model_recordings, "folder");
+      const optum::Graph g = build_graph(model_path, adapters, threads, adapter_timeout, true);
+      const optum::Diagnosis d = optum::diagnose(g, model_path);
+      optum::ModelInputs mi;
+      mi.graph = &g;
+      mi.diagnosis = &d;
+      mi.source_root = model_path;
+      mi.recordings = model_recordings;
+      mi.n8n = model_n8n;
+      mi.deployment = model_deployment;
+      const auto m = optum::build_model(mi);
+      if (model_format == "json") return write_text(m.dump(indent) + "\n", out_path);
+      return write_text(optum::model_markdown(m), out_path);
     }
     if (*disasm_cmd) {
       require_exists(disasm_path, "file");

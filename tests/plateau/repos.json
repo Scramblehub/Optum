@@ -1,0 +1,58 @@
+{
+ "about": "Which real repositories each role may be used for (docs/plans/plateau.md). tuning: looked at to find gaps and design fixes. held_out: never looked at while designing a fix; used only to check that a fix generalises. sealed: kept for the final release check, used for nothing else. A repo moves from held_out to tuning only by decision, and is then replaced in held_out. seen_held_out: repos that revealed a problem on a held-out run; still used to confirm that fix, but no longer independent evidence for it, so a fresh held-out repo checks it too.",
+ "python": {
+  "tuning": {
+   "boltons": "d31d821",
+   "click": "08b803c",
+   "marshmallow": "f268f0c",
+   "pyparsing": "810199f",
+   "attrs": "2a1fb86",
+   "more-itertools": "e3f79f4"
+  },
+  "held_out": [
+   "django",
+   "sphinx",
+   "sympy"
+  ]
+ },
+ "javascript": {
+  "tuning": {
+   "commander": "a5a7dc0",
+   "semver": "b37b033",
+   "chalk": "7211001",
+   "yargs": "9588a76",
+   "marked": "502e658"
+  },
+  "held_out": [
+   "express",
+   "lodash",
+   "npm"
+  ],
+  "seen_held_out": {
+   "npm": "round 2: showed the static-method unique-name regression; used again to check its fix"
+  }
+ },
+ "c": {
+  "tuning": {
+   "lua": "c42d820",
+   "zstd": "dca70ea",
+   "libyaml": "0.2.6",
+   "sqlite": "3.49.1",
+   "libuv": "f08538c",
+   "jansson": "851a214",
+   "mbedtls": "v3.6.2"
+  },
+  "held_out": [
+   "libgit2",
+   "jq"
+  ],
+  "sealed": [
+   "lz4",
+   "parson"
+  ],
+  "seen_held_out": {
+   "curl": "round 2: showed conditions set only by the build configuration (generated config header, -D flags); used again to check the compile_commands fix, no longer an independent test of it",
+   "redis": "round 2: same, plus the <assert.h> resolution bug"
+  }
+ }
+}

@@ -98,10 +98,10 @@ nightly script doing the same job (overlapping glue: the same 3 endpoints), and 
 helpers (duplicated logic). The unused cart flow can't be seen from code; that's for the recorded
 traffic.
 
-## Learning the tools' behaviour (`feat/infer-spec`, rough)
+## Learning the tools' behaviour (`optum infer`)
 
 ```sh
-python3 Core/infer/infer_spec.py testco/recordings --n8n testco/company/n8n -o specs/
+optum infer testco/recordings --n8n testco/company/n8n -o specs/
 ```
 
 From the recordings alone it writes a behaviour spec per tool (`specs/<tool>.spec.json`,
@@ -117,3 +117,81 @@ Two things keep the recordings honest:
 - **our own tools aren't the company:** loading, the smoke test and the checks send an
   `X-Optum-Harness` header, recorded as `harness` and left out of the specs; the business driver
   runs in its own container (`driver`), so its calls are the customers' and Stripe's.
+
+## Stage 1: the automation glue, replaced (`feat/stage1`, rough)
+
+The n8n flow and the nightly script turn a paid order into a posted invoice. Stage 1 replaces
+both with an owned service, `owned/orders_service.py` (the `owned` container, port 7000), that
+reacts to the payment event instead of polling. It goes through the five steps:
+
+```sh
+python3 testco/stages/stage1.py shadow      # Stripe sends to the old webhook and the owned service; the owned one only writes drafts
+python3 testco/stages/stage1.py reconcile   # each draft against the invoice the old glue posted
+python3 testco/stages/stage1.py switch      # needs 5+ agreeing orders, none differing, every check green
+python3 testco/stages/stage1.py fallback    # one step back to the old glue; the owned service keeps shadowing
+python3 testco/stages/stage1.py retire      # only once switched and green: n8n flows archived, n8n and the old webhook stopped
+python3 testco/stages/stage1.py check       # orders, regulated, contract (below)
+python3 testco/stages/stage1.py measure     # payment to posted invoice, old glue against owned service
+```
+
+Between steps, run a business day (`docker compose -f testco/compose.yaml exec -T driver python
+/driver/business_day.py --orders 8 --seed N`). The driver sends each payment event to every URL in
+`data/stripe_endpoints`, which the steps rewrite: that's how the "Stripe" side is switched.
+
+The checks, after every step:
+- **orders:** every live order completed, with exactly one posted invoice of its total;
+- **regulated:** the 2,000 fingerprinted tax invoices unchanged;
+- **contract:** from the recordings, the owned service makes no write to accounting that the old
+  glue never made, and creates invoices with the same fields (new reads are listed, not failed).
+
+Every action the owned service takes is in `data/stage1/audit.jsonl` (what, when, before and
+after); each step it takes checks first, so a retried payment event finishes the job without
+doing anything twice.
+
+**First run (2026-11-20):** shadow (8 orders, 8 agreeing), switch, a live day, fallback with a
+day on the old glue, switch again, retire, a day without n8n: 84 live orders, every check green.
+Payment to posted invoice: **0.25 s** median for the owned service against **96 s** for the n8n
+flow (it polls every 5 minutes). The live day found a bug: invoices were created but not posted
+(Odoo's `create` returns a list when given one), and a retry would have skipped them; fixed, and
+the 8 orders recovered by replaying their events (they account for the owned service's 65 s
+maximum).
+
+Not yet: the owned service is written by hand from the spec, not generated; reconciling replays
+recorded inputs only through live shadowing; and the platform pieces (backups, restore drill)
+come with `feat/platform`.
+
+## What could go: `optum model`
+
+```sh
+optum model testco/company --adapter "python3 Core/adapters/n8n/optum_n8n.py" \
+  --recordings testco/recordings --n8n testco/company/n8n --deployment testco/deployment.json
+```
+
+From the company's code (static facts), the recordings (observed facts) and
+[deployment.json](deployment.json) (what runs where: declared facts), it works out what each
+component does to which data, and classes it, with the reasons:
+
+| Component | Class | Why |
+|---|---|---|
+| payments webhook | essential | only it marks orders paid (sets status processing) |
+| abandoned-cart flow | independently removable | never ran in the recorded window; nothing depends on it |
+| orders-to-accounting flow | independently removable | the nightly script makes every write it makes, with the same invoice fields; *mutual*, so keep one of the two |
+| nightly script | independently removable | the same, the other way round |
+| `common.py` | not a component | shared code; reaches no system itself |
+| VIP report | unknown | it only reads; whether anyone uses what it prints can't be seen |
+| accounting (system) | essential | holds the regulated tax invoices |
+
+Each conclusion names its evidence and its weakest kind (a conclusion that needed the declared
+deployment is never more certain than "declared"), keeps the four kinds of equivalence apart
+(functional, data, behavioural: not claimed without a replay, operational), and lists the inputs
+it rests on by content hash: `optum model --check model.json` shows which conclusions went stale
+when a file changed. The answer key is checked by a ctest (`testco_model`) on hand-made recordings.
+
+**Workflows.** The same command reads the recordings as a process: every write is tied to the
+order it belongs to (by the record's own id, a field named `order_id`, or text such as `ref:
+"order 41"`, which is weaker, and every link says which), and each order's steps in time order
+become the paths orders take, with case counts and the median time of each transition. On the
+first run's recordings: 60 orders. The old glue's path (webhook marks the order paid, then the
+n8n flow invoices it, posts it, completes the order) and the owned service's are both there, as
+are the rehearsed fallback and the replayed bug orders. The n8n flow's polling shows up as the
+slowest transition.

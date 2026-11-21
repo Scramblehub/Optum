@@ -25,6 +25,15 @@ sys.path.insert(0, "/company")
 from common import HOOKS, PAYMENTS, PAYMENTS_KEY, SHOP, SHOP_AUTH
 
 LIVE = "/data/live_orders.json"
+ENDPOINTS = "/data/stripe_endpoints"  # one URL per line; written by stages/stage1.py
+
+
+def endpoints():
+    try:
+        urls = [u.strip() for u in open(ENDPOINTS) if u.strip()]
+    except OSError:
+        urls = []
+    return urls or [HOOKS + "/stripe-events"]
 
 
 def main():
@@ -47,7 +56,9 @@ def main():
             "metadata[order_id]": order["id"]}).json()
         event = {"type": "charge.succeeded", "data": {"object": {"id": charge["id"], "amount": cents,
                                                                  "metadata": {"order_id": str(order["id"])}}}}
-        hook = requests.post(HOOKS + "/stripe-events", json=event, timeout=60)
+        # Stripe sends each event to every endpoint the company has configured (data/stripe_endpoints).
+        statuses = [requests.post(url, json=event, timeout=60).status_code for url in endpoints()]
+        hook = type("R", (), {"status_code": max(statuses) if statuses else 0})
         live.append({"order": order["id"], "email": c["email"], "total_cents": cents, "charge": charge["id"],
                      "webhook_status": hook.status_code})
     json.dump(live, open(LIVE, "w"), indent=1)

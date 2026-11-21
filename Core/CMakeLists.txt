@@ -9,6 +9,8 @@ add_library(optum_core
   src/ir_json.cpp
   src/score.cpp
   src/verify.cpp
+  src/infer.cpp
+  src/model.cpp
   src/diagnose.cpp
   src/clones.cpp
   src/entities.cpp
