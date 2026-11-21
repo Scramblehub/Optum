@@ -188,7 +188,7 @@ retired**.
 | 6 | `feat/coexist-sync` | Two-way sync between the owned system and the remaining tools, by identity; the record-matching measurement against the ground truth | 1–2 weeks |
 | 7 | `feat/platform` | The standards filled in for what can't be seen (storage, backups, audit log and revert, idempotency, roles, retention, GDPR, security, monitoring, migrations) and their drills | 2 weeks |
 | 7b | `feat/cost-model` | Resource measurement per replacement in the test company (CPU, memory, storage per 1,000 records, backups); the cost model (both sides, shared costs, one-time, risk) and each stage's business case, before and after | 1 week |
-| 8 | `feat/stage-runner` | The five steps as a harness: shadow, parallel with replay comparison and daily reconciliation, switch, fallback, retire; contract tests for the kept services; rollback | 1–2 weeks |
+| 8 | `feat/stage-runner` (first rough version for stage 1: `testco/stages/stage1.py`, all five steps run green with a rehearsed fallback) | The five steps as a harness: shadow, parallel with replay comparison and daily reconciliation, switch, fallback, retire; contract tests for the kept services; rollback | 1–2 weeks |
 | 9 | `feat/stage-1-glue`, `feat/stage-2-...` | The owned replacements, built from each spec on the platform, one stage at a time | 1 week each |
 
 **Gate v0.3:** stages 1 and 2 go through all five steps in the test company with every check

@@ -102,13 +102,24 @@ services:
   # scripts, and its payments webhook (Node). Both call the tools by their internal names.
   company:
     build: ./company
+    user: "1000:1000"  # writes into ./data, which the host also writes
     volumes: ["./company:/company:ro", "./driver:/driver:ro", "./data:/data"]
 
   # The business driver (driver/business_day.py): stands in for customers and Stripe, in its own
   # container so its traffic is recorded as theirs, not the company's.
   driver:
     build: ./company
+    user: "1000:1000"  # writes into ./data, which the host also writes
     volumes: ["./company:/company:ro", "./driver:/driver:ro", "./data:/data"]
+
+  # The owned system (stage 1): replaces the automation glue. Built by Optum, owned by the company.
+  owned:
+    build: ./company
+    user: "1000:1000"  # writes into ./data, which the host also writes
+    command: ["python", "/owned/orders_service.py"]
+    environment:
+      MODE: shadow
+    volumes: ["./company:/company:ro", "./owned:/owned:ro", "./data:/data"]
 
   hooks:
     image: node:22-alpine
@@ -119,12 +130,13 @@ services:
   # per tool, recording every exchange with secrets redacted.
   observe:
     image: mitmproxy/mitmproxy:11.1.3
-    depends_on: [payments, accounting, automation, shop, hooks]
+    depends_on: [payments, accounting, automation, shop, hooks, owned]
     # The tools' internal names all lead here (each on its own port), so every call is recorded.
     networks:
       default:
         aliases: [payments.testco.internal, accounting.testco.internal, automation.testco.internal,
-                  shop.testco.internal, hooks.testco.internal, marketing.testco.internal]
+                  shop.testco.internal, hooks.testco.internal, marketing.testco.internal,
+                  owned.testco.internal]
     command: >-
       mitmdump --set block_global=false --set connection_strategy=lazy --set keep_host_header=true
       --mode reverse:http://payments:12111@12111
@@ -132,10 +144,11 @@ services:
       --mode reverse:http://automation:5678@5678
       --mode reverse:http://shop:80@8080
       --mode reverse:http://hooks:3000@3000
+      --mode reverse:http://owned:7000@7000
       -s /observe/addon.py
     environment:
       RECORDINGS_DIR: /recordings
-    ports: ["127.0.0.1:12111:12111", "127.0.0.1:8069:8069", "127.0.0.1:5678:5678", "127.0.0.1:8080:8080", "127.0.0.1:3000:3000"]
+    ports: ["127.0.0.1:12111:12111", "127.0.0.1:8069:8069", "127.0.0.1:5678:5678", "127.0.0.1:8080:8080", "127.0.0.1:3000:3000", "127.0.0.1:7000:7000"]
     volumes: ["./observe:/observe:ro", "./recordings:/recordings"]
 
 volumes:

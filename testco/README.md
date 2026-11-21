@@ -117,3 +117,45 @@ Two things keep the recordings honest:
 - **our own tools aren't the company:** loading, the smoke test and the checks send an
   `X-Optum-Harness` header, recorded as `harness` and left out of the specs; the business driver
   runs in its own container (`driver`), so its calls are the customers' and Stripe's.
+
+## Stage 1: the automation glue, replaced (`feat/stage1`, rough)
+
+The n8n flow and the nightly script turn a paid order into a posted invoice. Stage 1 replaces
+both with an owned service, `owned/orders_service.py` (the `owned` container, port 7000), that
+reacts to the payment event instead of polling. It goes through the five steps:
+
+```sh
+python3 testco/stages/stage1.py shadow      # Stripe sends to the old webhook and the owned service; the owned one only writes drafts
+python3 testco/stages/stage1.py reconcile   # each draft against the invoice the old glue posted
+python3 testco/stages/stage1.py switch      # needs 5+ agreeing orders, none differing, every check green
+python3 testco/stages/stage1.py fallback    # one step back to the old glue; the owned service keeps shadowing
+python3 testco/stages/stage1.py retire      # only once switched and green: n8n flows archived, n8n and the old webhook stopped
+python3 testco/stages/stage1.py check       # orders, regulated, contract (below)
+python3 testco/stages/stage1.py measure     # payment to posted invoice, old glue against owned service
+```
+
+Between steps, run a business day (`docker compose -f testco/compose.yaml exec -T driver python
+/driver/business_day.py --orders 8 --seed N`). The driver sends each payment event to every URL in
+`data/stripe_endpoints`, which the steps rewrite: that's how the "Stripe" side is switched.
+
+The checks, after every step:
+- **orders:** every live order completed, with exactly one posted invoice of its total;
+- **regulated:** the 2,000 fingerprinted tax invoices unchanged;
+- **contract:** from the recordings, the owned service makes no write to accounting that the old
+  glue never made, and creates invoices with the same fields (new reads are listed, not failed).
+
+Every action the owned service takes is in `data/stage1/audit.jsonl` (what, when, before and
+after); each step it takes checks first, so a retried payment event finishes the job without
+doing anything twice.
+
+**First run (2026-11-20):** shadow (8 orders, 8 agreeing), switch, a live day, fallback with a
+day on the old glue, switch again, retire, a day without n8n: 84 live orders, every check green.
+Payment to posted invoice: **0.25 s** median for the owned service against **96 s** for the n8n
+flow (it polls every 5 minutes). The live day found a bug: invoices were created but not posted
+(Odoo's `create` returns a list when given one), and a retry would have skipped them; fixed, and
+the 8 orders recovered by replaying their events (they account for the owned service's 65 s
+maximum).
+
+Not yet: the owned service is written by hand from the spec, not generated; reconciling replays
+recorded inputs only through live shadowing; and the platform pieces (backups, restore drill)
+come with `feat/platform`.
