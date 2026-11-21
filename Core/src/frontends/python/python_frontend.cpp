@@ -1305,6 +1305,20 @@ class Linker {
     }
   }
 
+  // Reading a property runs its getter: for each `a.prop` along the callee (`self.prop(...)`,
+  // `x.prop.m(...)`, `self.a.prop.m(...)`) whose object's class is known, an edge to the getter.
+  void property_edges(const CallSite& cs) {
+    for (const Expr* e = &cs.callee; e->kind == Expr::Kind::Attr; e = &e->sub[0]) {
+      const Value obj = p_.resolve_expr(m_, cs.scope, e->sub[0], 0);
+      if (obj.kind != Value::Kind::Instance && obj.kind != Value::Kind::SelfInstance) continue;
+      const auto m = p_.lookup_method(obj.ref, e->text);
+      if (!m || !p_.def(*m).property) continue;
+      guess_ = obj.guess;
+      call_edge(cs, *m, Confidence::Inferred, "property");
+      guess_ = Value::None;
+    }
+  }
+
   // obj(...) where obj is an instance of a known class: its __call__.
   void call_dunder(const CallSite& cs, const Value& obj) {
     if (const auto mth = p_.lookup_method(obj.ref, "__call__")) call_edge(cs, *mth, Confidence::Inferred, "call_dunder");
@@ -1314,6 +1328,7 @@ class Linker {
     if (!cs.protocol.empty()) return on_protocol_call(cs);
     guess_ = Value::None;
     const Expr& callee = cs.callee;
+    if (callee.kind == Expr::Kind::Attr && !protocol_) property_edges(cs);
     if (callee.kind == Expr::Kind::Name && call_param(cs)) return;
     if (callee.kind == Expr::Kind::Attr && try_sql(cs)) return;
 

@@ -220,7 +220,7 @@ TEST_CASE("python: a method name is not guessed for a call on an imported standa
   REQUIRE(e.count("calls py:m.go -> py:m.Lazy.join") == 0);
 }
 
-TEST_CASE("python: a call through a property's result is still guessed by unique name; the property isn't what's called") {
+TEST_CASE("python: a property's getter is called when it is read, and what it returns is still guessed by unique name") {
   Project p;
   p.write("sql.py",
           "import copy\n"
@@ -268,5 +268,9 @@ TEST_CASE("python: a call through a property's result is still guessed by unique
   REQUIRE(has("py:qs.QS.order", "py:sql.Query.add_ordering"));
   REQUIRE(has("py:qs.QS.named_like_a_module", "py:sql.Query.add_ordering"));
   REQUIRE(has("py:qs.QS.none", "py:sql.Query.set_empty"));
+  // The getter runs when the property is read, so the caller calls it (and what it returns is unknown).
+  REQUIRE(e.count("calls py:qs.QS.none -> py:qs.QS.query") == 1);
+  REQUIRE(e.count("calls py:qs.QS.order -> py:qs.QS.query") == 1);
+  REQUIRE(has("py:qs.QS.build", "py:qs.QS.func") == false);  // f is unknown: nothing says func is the property
   REQUIRE(e.count("calls py:qs.QS.build -> py:qs.QS.func") == 0);
 }
