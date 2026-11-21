@@ -85,7 +85,8 @@ class JsFrontend : public Frontend {
 
 class CFrontend : public Frontend {
  public:
-  explicit CFrontend(unsigned threads) : threads_(threads) {
+  CFrontend(unsigned threads, std::string compile_commands)
+      : threads_(threads), compile_commands_(std::move(compile_commands)) {
     info_.name = "c";
     info_.version = "builtin";
     info_.file_patterns = {"*.c", "*.h"};
@@ -94,10 +95,18 @@ class CFrontend : public Frontend {
   Extraction extract(const fs::path& root, const std::vector<fs::path>& files) override {
     CStats stats;
     Extraction x;
-    x.graph = extract_c_files(root, files, &stats, threads_);
+    x.graph = extract_c_files(root, files, &stats, threads_, compile_commands_);
     x.summary = std::to_string(stats.files) + " files, " + std::to_string(stats.lines) + " lines";
     if (stats.files_with_syntax_errors) {
       x.summary += " (" + std::to_string(stats.files_with_syntax_errors) + " with syntax errors)";
+    }
+    if (stats.build_database) {
+      x.summary += "; build configuration from compile_commands.json (" + std::to_string(stats.build_files) +
+                   " files, " + std::to_string(stats.external_headers) + " generated headers)";
+    } else if (stats.assumed_off_names) {
+      x.diagnostics += "conditions on " + std::to_string(stats.assumed_off_names) +
+                       " names defined by no visible file were assumed off: " + std::to_string(stats.assumed_off_edges) +
+                       " edges conditional; pass --compile-commands for the build's own configuration\n";
     }
     report_unreadable(stats.unreadable, x);
     return x;
@@ -106,6 +115,7 @@ class CFrontend : public Frontend {
  private:
   FrontendInfo info_;
   unsigned threads_;
+  std::string compile_commands_;
 };
 
 // Binaries are found by their content (the ELF magic), not their name: every file is offered.
@@ -243,7 +253,9 @@ std::unique_ptr<Frontend> make_python_frontend(unsigned threads) {
 }
 
 std::unique_ptr<Frontend> make_js_frontend(unsigned threads) { return std::make_unique<JsFrontend>(threads); }
-std::unique_ptr<Frontend> make_c_frontend(unsigned threads) { return std::make_unique<CFrontend>(threads); }
+std::unique_ptr<Frontend> make_c_frontend(unsigned threads, const std::string& compile_commands) {
+  return std::make_unique<CFrontend>(threads, compile_commands);
+}
 std::unique_ptr<Frontend> make_binary_frontend() { return std::make_unique<BinaryFrontend>(); }
 
 std::unique_ptr<Frontend> make_external_frontend(const std::string& command,

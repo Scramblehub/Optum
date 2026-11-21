@@ -37,7 +37,8 @@ class Frontend {
 
 std::unique_ptr<Frontend> make_python_frontend(unsigned threads = 0);
 std::unique_ptr<Frontend> make_js_frontend(unsigned threads = 0);
-std::unique_ptr<Frontend> make_c_frontend(unsigned threads = 0);
+// `compile_commands`: see extract_c_files ("" finds one at the root, "none" ignores any).
+std::unique_ptr<Frontend> make_c_frontend(unsigned threads = 0, const std::string& compile_commands = "");
 std::unique_ptr<Frontend> make_binary_frontend();
 
 // Starts the adapter once with `describe` to learn its name and patterns. Throws IrError with

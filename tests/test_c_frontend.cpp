@@ -373,3 +373,86 @@ TEST_CASE("c: a function renamed by a #define in a compiled branch is compiled, 
   CHECK(e->confidence == optum::Confidence::Exact);
   CHECK_FALSE(e->attrs.value("inactive", false));
 }
+
+TEST_CASE("c: <assert.h> is never a vendored header that happens to share its name") {
+  TempDir dir;
+  dir.write("deps/lib/internal/assert.h", "#define assert(x) vendored_check(x)\nvoid vendored_check(int x);\n");
+  dir.write("deps/lib/impl.c", "void vendored_check(int x) {}\n");
+  dir.write("deps/lib/sub/d.c",  // inside the same vendored tree a quoted include may find it
+            "#include \"internal/assert.h\"\nvoid d(int x) { assert(x); }\n");
+  dir.write("src/a.c", "#include <assert.h>\nvoid f(int x) { assert(x); }\n");
+  dir.write("src/b.c", "#include \"internal/assert.h\"\nvoid g(int x) { assert(x); }\n");  // not our tree
+  const optum::Graph g = optum::extract_c_files(dir.path, {"deps/lib/internal/assert.h", "deps/lib/impl.c",
+                                                            "deps/lib/sub/d.c", "src/a.c", "src/b.c"});
+  CHECK_FALSE(find_call(g, "c:src/a.c#f", "c:deps/lib/impl.c#vendored_check"));
+  CHECK_FALSE(find_call(g, "c:src/b.c#g", "c:deps/lib/impl.c#vendored_check"));
+  CHECK(find_call(g, "c:deps/lib/sub/d.c#d", "c:deps/lib/impl.c#vendored_check"));
+  // The project's own include/ directory still serves <angle> includes without a build database.
+  TempDir own;
+  own.write("include/lib/api.h", "void api_call(void);\n");
+  own.write("src/api.c", "#include <lib/api.h>\nvoid api_call(void) {}\n");
+  own.write("src/use.c", "#include <lib/api.h>\nvoid use(void) { api_call(); }\n");
+  const optum::Graph h = optum::extract_c_files(own.path, {"include/lib/api.h", "src/api.c", "src/use.c"});
+  const optum::Edge* e = find_call(h, "c:src/use.c#use", "c:src/api.c#api_call");
+  REQUIRE(e);
+  CHECK(e->confidence == optum::Confidence::Exact);
+}
+
+TEST_CASE("c: --compile-commands gives -D, -I (even outside the root) and the files in the build") {
+  TempDir dir;
+  const fs::path gen = dir.path.parent_path() / ("optum_c_gen_" + std::to_string(getpid()));
+  fs::remove_all(gen);
+  fs::create_directories(gen);
+  std::ofstream(gen / "gen_config.h") << "#define HAVE_FEATURE 1\n";
+  dir.write("src/a.c",
+            "#include \"gen_config.h\"\n"
+            "void dup_fn(void);\n"
+            "void feat(void) {}\n"
+            "void jem(void) {}\n"
+            "void nope(void) {}\n"
+            "void run(void) {\n"
+            "#if defined(HAVE_FEATURE)\n"
+            "  feat();\n"
+            "#endif\n"
+            "#ifdef USE_JEMALLOC\n"
+            "  jem();\n"
+            "#endif\n"
+            "#ifdef NOT_SET\n"
+            "  nope();\n"
+            "#endif\n"
+            "  dup_fn();\n"
+            "}\n");
+  dir.write("lib/other.c", "void dup_fn(void) {}\n");
+  dir.write("alt/dup.c", "void dup_fn(void) {}\n");
+  const std::string db = (dir.path / "cc.json").string();
+  std::ofstream(db) << "[{\"directory\": \"" << dir.path.generic_string()
+                    << "\", \"file\": \"src/a.c\", \"command\": \"cc -DUSE_JEMALLOC -I" << gen.generic_string()
+                    << " -c src/a.c\"}, {\"directory\": \"" << dir.path.generic_string()
+                    << "\", \"file\": \"lib/other.c\", \"command\": \"cc -c lib/other.c\"}]";
+  auto edge = [&](const optum::Graph& g, const char* to) { return find_call(g, "c:src/a.c#run", to); };
+  const std::vector<fs::path> files = {"src/a.c", "lib/other.c", "alt/dup.c"};
+
+  optum::CStats with;
+  const optum::Graph g = optum::extract_c_files(dir.path, files, &with, 0, db);
+  REQUIRE(edge(g, "c:src/a.c#feat"));
+  CHECK(edge(g, "c:src/a.c#feat")->confidence == optum::Confidence::Exact);  // from the generated header
+  REQUIRE(edge(g, "c:src/a.c#jem"));
+  CHECK(edge(g, "c:src/a.c#jem")->confidence == optum::Confidence::Exact);  // from -D
+  REQUIRE(edge(g, "c:src/a.c#nope"));
+  CHECK(edge(g, "c:src/a.c#nope")->attrs.value("inactive", false));  // off, now for certain
+  REQUIRE(edge(g, "c:lib/other.c#dup_fn"));  // the definition that is in the build
+  CHECK_FALSE(edge(g, "c:alt/dup.c#dup_fn"));
+  CHECK(with.build_database);
+  CHECK(with.external_headers == 1);
+  CHECK(with.assumed_off_names == 0);
+
+  optum::CStats without;
+  const optum::Graph h = optum::extract_c_files(dir.path, files, &without, 0, "none");
+  CHECK(edge(h, "c:src/a.c#feat")->attrs.value("inactive", false));  // a guess
+  CHECK(edge(h, "c:src/a.c#jem")->attrs.value("inactive", false));
+  CHECK_FALSE(without.build_database);
+  CHECK(without.assumed_off_names >= 2);
+  CHECK(without.assumed_off_edges >= 2);
+  CHECK_FALSE(edge(h, "c:lib/other.c#dup_fn"));  // two definitions: ambiguous without the file list
+  fs::remove_all(gen);
+}
