@@ -122,12 +122,18 @@ Items 1 and 3 come first: personal data in recordings and unapproved switches ar
 biggest risks today. Item 6 also removes the stage harness's dependence on Docker, which a real
 company would never grant.
 
-## Decisions for you
+## Decisions
 
-- **Hosting:** Optum always inside the company's environment (assumed here), or also a hosted
-  option for small companies? Hosting changes the data-protection position completely.
-- **The approval model:** one approver per switch, two for regulated systems (assumed), or
-  whatever the company already uses?
-- **Certifications:** whether to aim for SOC 2 or ISO 27001 for Optum itself. Larger customers
-  will ask, and the audit log and access plan are most of the evidence either needs.
-
+- **Hosting: open, to be settled by interviewing companies.** Inside the company's environment is
+  assumed here; an Optum-hosted option for small companies changes the data-protection position
+  completely (Optum would hold their data). Questions for the interviews: would you run it in your
+  own cloud or have it hosted; what your vendor security review requires; who would approve
+  Optum's access and who approves production changes today; whether traffic from your SaaS tools
+  can be recorded, and what your data-protection officer needs first.
+- **Approvals: agreed.** One approver per switch; two for anything touching regulated systems;
+  fallback never waits for approval.
+- **Certifications (SOC 2, ISO 27001): deferred.** They certify Optum as a vendor (its access
+  control, change review, incident handling), not the product, and take months and real money.
+  Not needed for first pilots, and much more pressing if Optum hosts customers' data. Meanwhile
+  the audit log, the per-phase access plan, reviewed changes through CI, and deletion with proof
+  are built so that the evidence exists when a customer asks.
