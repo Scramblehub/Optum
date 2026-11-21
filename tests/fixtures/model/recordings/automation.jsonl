@@ -1,0 +1,1 @@
+{"recording_version": "0.1", "tool": "automation", "started": "2026-11-20T10:00:18.000Z", "duration_ms": 5, "method": "GET", "path": "/healthz", "query": {}, "request": {"headers": {}, "body": null}, "response": {"status": 200, "headers": {}, "body": {"status": "ok"}}, "client": "automation"}

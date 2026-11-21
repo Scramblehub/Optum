@@ -159,3 +159,30 @@ maximum).
 Not yet: the owned service is written by hand from the spec, not generated; reconciling replays
 recorded inputs only through live shadowing; and the platform pieces (backups, restore drill)
 come with `feat/platform`.
+
+## What could go: `optum model`
+
+```sh
+optum model testco/company --adapter "python3 Core/adapters/n8n/optum_n8n.py" \
+  --recordings testco/recordings --n8n testco/company/n8n --deployment testco/deployment.json
+```
+
+From the company's code (static facts), the recordings (observed facts) and
+[deployment.json](deployment.json) (what runs where: declared facts), it works out what each
+component does to which data, and classes it, with the reasons:
+
+| Component | Class | Why |
+|---|---|---|
+| payments webhook | essential | only it marks orders paid (sets status processing) |
+| abandoned-cart flow | independently removable | never ran in the recorded window; nothing depends on it |
+| orders-to-accounting flow | independently removable | the nightly script makes every write it makes, with the same invoice fields; *mutual*, so keep one of the two |
+| nightly script | independently removable | the same, the other way round |
+| `common.py` | not a component | shared code; reaches no system itself |
+| VIP report | unknown | it only reads; whether anyone uses what it prints can't be seen |
+| accounting (system) | essential | holds the regulated tax invoices |
+
+Each conclusion names its evidence and its weakest kind (a conclusion that needed the declared
+deployment is never more certain than "declared"), keeps the four kinds of equivalence apart
+(functional, data, behavioural: not claimed without a replay, operational), and lists the inputs
+it rests on by content hash: `optum model --check model.json` shows which conclusions went stale
+when a file changed. The answer key is checked by a ctest (`testco_model`) on hand-made recordings.

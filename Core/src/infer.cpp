@@ -150,6 +150,8 @@ struct Op {
   FieldMap request, response;
   std::set<std::string> query;
   json resource;
+  std::string endpoint;               // method and templated path, also for RPC operations
+  std::set<std::string> status_sent;  // the status values it sets: what a write does to a record
 };
 
 ojson fmap(const FieldMap& m) {
@@ -195,6 +197,7 @@ ojson learn_spec(const std::vector<json>& records) {
     std::string op;
     json values;
     json resource;
+    const std::string endpoint = r.at("method").get<std::string>() + " " + template_path(r.at("path").get<std::string>());
     if (call) {
       op = call->op;
       if (call->model) resource = *call->model;
@@ -211,6 +214,7 @@ ojson learn_spec(const std::vector<json>& records) {
       Op o;
       o.first = member(r, "started");
       o.resource = resource;
+      o.endpoint = endpoint;
       ops.emplace_back(op, std::move(o));
       it = std::prev(ops.end());
     }
@@ -227,6 +231,8 @@ ojson learn_spec(const std::vector<json>& records) {
         o.query.insert(k);
       }
     }
+    const json& sent_status = member(member(r.at("request"), "body"), "status");
+    if (!call && sent_status.is_string()) o.status_sent.insert(sent_status.get<std::string>());
     const bool has_resource = resource.is_string() && !resource.get<std::string>().empty();
     const std::string res = has_resource ? resource.get<std::string>() : "";
     if (!values.is_null()) {
@@ -290,6 +296,8 @@ ojson learn_spec(const std::vector<json>& records) {
     e["last_seen"] = ojson::parse(o.last.dump());
     e["resource"] = ojson::parse(o.resource.dump());
     e["query"] = std::vector<std::string>(o.query.begin(), o.query.end());
+    e["endpoint"] = o.endpoint;
+    e["status_sent"] = std::vector<std::string>(o.status_sent.begin(), o.status_sent.end());
     e["request_fields"] = fmap(o.request);
     e["response_fields"] = fmap(o.response);
     operations[p->first] = e;
@@ -360,7 +368,7 @@ std::string join(const std::vector<std::string>& parts, const std::string& sep) 
 
 }  // namespace
 
-InferResult infer(const InferOptions& opts) {
+std::map<std::string, std::vector<json>> load_recordings(const InferOptions& opts, std::size_t* harness) {
   if (!std::filesystem::is_directory(opts.recordings)) {
     throw IrError(opts.recordings.string() + ": not a folder of recordings");
   }
@@ -370,7 +378,6 @@ InferResult infer(const InferOptions& opts) {
   }
   std::sort(files.begin(), files.end());
 
-  InferResult result;
   std::map<std::string, std::vector<json>> by_tool;
   for (const auto& f : files) {
     std::ifstream in(f);
@@ -390,7 +397,7 @@ InferResult infer(const InferOptions& opts) {
         throw IrError(f.string() + ":" + std::to_string(lineno) + ": a recording needs a \"tool\"");
       }
       if (truthy(member(r, "harness"))) {  // Optum's own loading and checking tools: not the company's behaviour
-        ++result.harness;
+        if (harness) ++*harness;
         continue;
       }
       const std::string tool = r["tool"].get<std::string>();
@@ -399,6 +406,12 @@ InferResult infer(const InferOptions& opts) {
       by_tool[tool].push_back(std::move(r));
     }
   }
+  return by_tool;
+}
+
+InferResult infer(const InferOptions& opts) {
+  InferResult result;
+  const auto by_tool = load_recordings(opts, &result.harness);
 
   std::vector<std::string> times;
   for (const auto& [tool, recs] : by_tool) {

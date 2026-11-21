@@ -12,6 +12,7 @@
 #include "optum/frontend.hpp"
 #include "optum/frontends/binary.hpp"
 #include "optum/infer.hpp"
+#include "optum/model.hpp"
 #include "optum/ir.hpp"
 #include "optum/score.hpp"
 #include "optum/syntax_tree.hpp"
@@ -347,6 +348,24 @@ int main(int argc, char** argv) {
   infer_cmd->add_option("-o,--out", infer_out, "Output folder")->required();
   infer_cmd->add_flag("-q,--quiet", quiet, "Don't print the summary to stderr");
 
+  std::string model_path, model_recordings, model_n8n, model_deployment, model_format = "markdown", model_check;
+  auto* model_cmd = app.add_subcommand("model", "What each component does to which data, and whether it could go");
+  model_cmd->footer(
+      "Example: optum model testco/company --adapter \"python3 Core/adapters/n8n/optum_n8n.py\" \\\n"
+      "           --recordings testco/recordings --n8n testco/company/n8n --deployment testco/deployment.json\n"
+      "         optum model --check model.json       which conclusions rest on inputs that changed since\n"
+      "Plan: docs/plans/capabilities.md. Every conclusion lists its evidence and the inputs it rests on.");
+  model_cmd->add_option("path", model_path, "The company's code (directory)");
+  model_cmd->add_option("--recordings", model_recordings, "Folder of recorded traffic (<tool>.jsonl)");
+  model_cmd->add_option("--n8n", model_n8n, "Folder of the automation tool's exported flows");
+  model_cmd->add_option("--deployment", model_deployment, "What runs where: systems, hosts, clients (JSON)");
+  model_cmd->add_option("--check", model_check, "A saved model (JSON): list conclusions whose inputs changed");
+  model_cmd->add_option("-f,--format", model_format, "markdown or json")->check(CLI::IsMember({"markdown", "json"}))->capture_default_str();
+  model_cmd->add_option("-o,--out", out_path, "Output file (default: stdout)");
+  model_cmd->add_option("-j,--threads", threads, "Worker threads; 0 = all cores");
+  model_cmd->add_flag("-q,--quiet", quiet, "Don't print progress to stderr");
+  add_adapter_options(model_cmd);
+
   std::string disasm_path;
   auto* disasm_cmd = app.add_subcommand("disasm", "Research aid: an ELF binary's functions and instructions, as JSON");
   disasm_cmd->add_option("binary", disasm_path, "x86-64 ELF executable or shared library")->required();
@@ -383,6 +402,34 @@ int main(int argc, char** argv) {
                   << r.observed["findings"].size() << " observed finding(s)\n";
       }
       return 0;
+    }
+    if (*model_cmd) {
+      if (!model_check.empty()) {
+        std::ifstream in(model_check);
+        if (!in) throw optum::IrError(model_check + ": cannot open");
+        const auto r = optum::check_model(nlohmann::ordered_json::parse(in), std::filesystem::current_path());
+        std::cout << r.dump(indent) << "\n";
+        return r["stale"].empty() ? 0 : 1;
+      }
+      if (model_path.empty() || model_deployment.empty()) {
+        std::cerr << "optum: model needs the code's directory and --deployment (or --check with a saved model)\n";
+        return 2;
+      }
+      require_exists(model_path, "directory");
+      require_exists(model_deployment, "file");
+      if (!model_recordings.empty()) require_exists(model_recordings, "folder");
+      const optum::Graph g = build_graph(model_path, adapters, threads, adapter_timeout, true);
+      const optum::Diagnosis d = optum::diagnose(g, model_path);
+      optum::ModelInputs mi;
+      mi.graph = &g;
+      mi.diagnosis = &d;
+      mi.source_root = model_path;
+      mi.recordings = model_recordings;
+      mi.n8n = model_n8n;
+      mi.deployment = model_deployment;
+      const auto m = optum::build_model(mi);
+      if (model_format == "json") return write_text(m.dump(indent) + "\n", out_path);
+      return write_text(optum::model_markdown(m), out_path);
     }
     if (*disasm_cmd) {
       require_exists(disasm_path, "file");

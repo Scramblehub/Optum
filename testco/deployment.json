@@ -1,0 +1,20 @@
+{
+ "about": "What runs where in the test company: declared, as a company (or its deployment config) would tell Optum. optum model uses it to attribute recorded traffic to code, and marks every conclusion that relies on it as resting on declared evidence.",
+ "systems": {
+  "shop": {"hosts": ["shop.testco.internal:8080"]},
+  "accounting": {"hosts": ["accounting.testco.internal:8069"], "regulated": ["account.move"]},
+  "payments": {"hosts": ["payments.testco.internal:12111"]},
+  "marketing": {"hosts": ["marketing.testco.internal:9000"]},
+  "automation": {"hosts": ["automation.testco.internal:5678"]},
+  "hooks": {"hosts": ["hooks.testco.internal:3000"]}
+ },
+ "runs": {
+  "automation": ["n8n:*"],
+  "hooks": ["js:payments_webhook.js"],
+  "company": ["py:*"]
+ },
+ "actors": {
+  "driver": "customers and the payment provider (the business driver)",
+  "owned": "the owned orders service (stage 1), not part of the code analysed here"
+ }
+}
