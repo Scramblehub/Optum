@@ -160,6 +160,13 @@ NodeIndex resolve_node(const Graph& g, std::string_view ref) {
 
 NodeIndex module_of(const Graph& g, NodeIndex n) { return module_with(g, parents(g), n); }
 
+std::vector<NodeIndex> modules_of(const Graph& g) {
+  const auto parent = parents(g);
+  std::vector<NodeIndex> out(g.nodes().size());
+  for (NodeIndex i = 0; i < out.size(); ++i) out[i] = module_with(g, parent, i);
+  return out;
+}
+
 Graph make_view(const Graph& g, const ViewOptions& o) {
   Graph v = filter_edges(g, o);
   if (o.level == Level::Module) v = collapse_to_modules(v);

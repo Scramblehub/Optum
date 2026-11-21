@@ -446,6 +446,11 @@ int main(int argc, char** argv) {
   } catch (const optum::IrError& e) {
     std::cerr << "optum: " << e.what() << "\n";
     return 1;
+  } catch (const std::exception& e) {
+    // Anything unforeseen (a file that can't be read as expected, a field of the wrong type in a
+    // saved file): say so and exit 1 instead of aborting with a core dump.
+    std::cerr << "optum: unexpected error: " << e.what() << "\n";
+    return 1;
   }
   return 0;
 }

@@ -233,10 +233,22 @@ std::vector<CloneGroup> find_clones(const Graph& g, const fs::path& root, const 
       fns.push_back(std::move(fn));
     }
   }
+  // A saved graph can hold `defines` cycles (a function defining itself): every walk up the
+  // parents is bounded, and a function whose chain loops gets no parent.
   for (const auto& [node, k] : fn_of) {  // nearest enclosing candidate function
-    for (auto p = parent.find(node); p != parent.end(); p = parent.find(p->second)) {
+    std::size_t steps = 0;
+    for (auto p = parent.find(node); p != parent.end() && steps <= g.nodes().size(); p = parent.find(p->second), ++steps) {
       if (auto f = fn_of.find(p->second); f != fn_of.end()) {
         fns[k].parent = f->second;
+        break;
+      }
+    }
+  }
+  for (std::size_t k = 0; k < fns.size(); ++k) {
+    std::size_t steps = 0;
+    for (auto p = fns[k].parent; p; p = fns[*p].parent) {
+      if (*p == k || ++steps > fns.size()) {
+        fns[k].parent.reset();
         break;
       }
     }

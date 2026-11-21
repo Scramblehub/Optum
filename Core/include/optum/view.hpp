@@ -32,6 +32,10 @@ NodeIndex resolve_node(const Graph& g, std::string_view ref);
 // node itself if it isn't inside one (externals, stores, third-party packages, modules).
 NodeIndex module_of(const Graph& g, NodeIndex n);
 
+// module_of for every node at once, in one pass over the edges (module_of alone rebuilds its
+// lookup tables on each call, so calling it per node is quadratic).
+std::vector<NodeIndex> modules_of(const Graph& g);
+
 Graph make_view(const Graph& g, const ViewOptions& o);
 
 }  // namespace optum

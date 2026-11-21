@@ -111,10 +111,9 @@ struct Layout {
 
 Layout layout(const Graph& g) {
   Layout l;
-  l.module.resize(g.nodes().size());
+  l.module = modules_of(g);
   std::set<NodeIndex> has_members;
   for (NodeIndex i = 0; i < g.nodes().size(); ++i) {
-    l.module[i] = module_of(g, i);
     if (l.module[i] != i) has_members.insert(l.module[i]);
   }
   for (NodeIndex i = 0; i < g.nodes().size(); ++i) {

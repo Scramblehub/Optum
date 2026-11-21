@@ -164,8 +164,9 @@ EntityResult find_entities(const Graph& g) {
     }
     if (std::find(s.users.begin(), s.users.end(), from.id) == s.users.end()) s.users.push_back(from.id);
     add_fields(s, table ? e.attrs["columns"] : e.attrs["fields"]);
-    if (table && e.attrs.contains("keys")) {
+    if (table && e.attrs.contains("keys") && e.attrs["keys"].is_array()) {
       for (const auto& k : e.attrs["keys"]) {
+        if (!k.is_string()) continue;  // adapters write these: a stray number must not abort the report
         const std::string nk = normalize_field(k.get<std::string>());
         if (std::find(s.declared_keys.begin(), s.declared_keys.end(), nk) == s.declared_keys.end()) s.declared_keys.push_back(nk);
       }
@@ -196,26 +197,44 @@ EntityResult find_entities(const Graph& g) {
   }
   if (list.size() < 2) return result;
 
-  // Field weights: rare fields say more; generic ones (id, name, created_at) little.
-  std::unordered_map<std::string, int> df;
-  for (const auto& s : list) {
-    for (const auto& f : s.normalized) ++df[f];
+  // Field weights: rare fields say more; generic ones (id, name, created_at) little. Fields are
+  // numbered once, so comparing two shapes is integer lookups, not string sets rebuilt per pair.
+  std::unordered_map<std::string, int> field_id;
+  std::vector<double> weight_of;       // by field number
+  std::vector<bool> generic_of;        // by field number
+  std::vector<std::vector<int>> ids(list.size());      // each shape's field numbers, in field order
+  std::vector<std::vector<int>> sorted_ids(list.size());  // the same, sorted: for membership tests
+  std::vector<double> total_weight(list.size(), 0.0);
+  std::vector<int> df;
+  for (std::size_t k = 0; k < list.size(); ++k) {
+    for (const auto& f : list[k].normalized) {
+      const auto [it, fresh] = field_id.try_emplace(f, static_cast<int>(df.size()));
+      if (fresh) {
+        df.push_back(0);
+        generic_of.push_back(generic_field(f));
+      }
+      ++df[static_cast<std::size_t>(it->second)];
+      ids[k].push_back(it->second);
+    }
   }
   const double n_shapes = static_cast<double>(list.size());
-  auto weight = [&](const std::string& f) { return generic_field(f) ? 0.1 : std::log(1.0 + n_shapes / df[f]); };
-  auto similarity = [&](const EntityShape& a, const EntityShape& b) {
+  for (std::size_t f = 0; f < df.size(); ++f) weight_of.push_back(generic_of[f] ? 0.1 : std::log(1.0 + n_shapes / df[f]));
+  for (std::size_t k = 0; k < list.size(); ++k) {
+    for (int f : ids[k]) total_weight[k] += weight_of[static_cast<std::size_t>(f)];  // in field order, as before
+    sorted_ids[k] = ids[k];
+    std::sort(sorted_ids[k].begin(), sorted_ids[k].end());
+  }
+  auto similarity = [&](std::size_t a, std::size_t b) {
     Similarity s;
-    const std::set<std::string> fb(b.normalized.begin(), b.normalized.end());
-    double shared = 0, wa = 0, wb = 0;
-    for (const auto& f : a.normalized) {
-      wa += weight(f);
-      if (fb.count(f)) {
-        shared += weight(f);
-        if (!generic_field(f)) ++s.shared_specific;
-      }
+    const auto& fb = sorted_ids[b];
+    double shared = 0;
+    for (int f : ids[a]) {
+      if (!std::binary_search(fb.begin(), fb.end(), f)) continue;
+      shared += weight_of[static_cast<std::size_t>(f)];
+      if (!generic_of[static_cast<std::size_t>(f)]) ++s.shared_specific;
     }
-    for (const auto& f : b.normalized) wb += weight(f);
-    s.containment = std::min(wa, wb) > 0 ? shared / std::min(wa, wb) : 0;
+    const double smaller = std::min(total_weight[a], total_weight[b]);
+    s.containment = smaller > 0 ? shared / smaller : 0;
     return s;
   };
   // Same entity only when something identifies it, never by coincidence of names or a few
@@ -228,16 +247,37 @@ EntityResult find_entities(const Graph& g) {
     return false;
   };
   auto same = [&](std::size_t a, std::size_t b) {
-    const Similarity s = similarity(list[a], list[b]);
+    const Similarity s = similarity(a, b);
     if (shared_key(a, b)) return s.shared_specific >= 2 && s.containment >= 0.4;
     return s.shared_specific >= 3 && s.containment >= 0.75;
   };
 
+  // Either test needs 2+ specific fields in common, so only shapes sharing that many are compared:
+  // found through the shapes that have each specific field, not by trying every pair.
+  std::vector<std::vector<std::size_t>> having(df.size());
+  for (std::size_t k = 0; k < list.size(); ++k) {
+    for (int f : ids[k]) {
+      if (!generic_of[static_cast<std::size_t>(f)]) having[static_cast<std::size_t>(f)].push_back(k);
+    }
+  }
   std::vector<std::tuple<double, std::size_t, std::size_t>> pairs;
+  std::vector<int> common(list.size(), 0);
   for (std::size_t a = 0; a < list.size(); ++a) {
-    for (std::size_t b = a + 1; b < list.size(); ++b) {
-      if (list[a].id == list[b].id) continue;
-      if (same(a, b)) pairs.emplace_back(similarity(list[a], list[b]).containment, a, b);
+    std::vector<std::size_t> touched;
+    for (int f : ids[a]) {
+      if (generic_of[static_cast<std::size_t>(f)]) continue;
+      for (std::size_t b : having[static_cast<std::size_t>(f)]) {
+        if (b <= a) continue;
+        if (common[b]++ == 0) touched.push_back(b);
+      }
+    }
+    std::sort(touched.begin(), touched.end());  // the order a plain a<b loop would visit them
+    for (std::size_t b : touched) {
+      const bool enough = common[b] >= 2;
+      common[b] = 0;
+      if (!enough || list[a].id == list[b].id) continue;
+      const Similarity s = similarity(a, b);
+      if (same(a, b)) pairs.emplace_back(s.containment, a, b);
     }
   }
   std::sort(pairs.begin(), pairs.end(), [](const auto& x, const auto& y) { return std::get<0>(x) > std::get<0>(y); });
@@ -278,7 +318,7 @@ EntityResult find_entities(const Graph& g) {
       for (const auto& f : s.normalized) {
         if (!counts[f]++) order.push_back(f);
       }
-      for (std::size_t j = i + 1; j < ks.size(); ++j) eg.score = std::min(eg.score, similarity(s, list[ks[j]]).containment);
+      for (std::size_t j = i + 1; j < ks.size(); ++j) eg.score = std::min(eg.score, similarity(ks[i], ks[j]).containment);
       eg.members.push_back(s);
     }
     eg.name = std::max_element(names.begin(), names.end(), [](const auto& x, const auto& y) { return x.second < y.second; })->first;
