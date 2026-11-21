@@ -1,0 +1,8 @@
+{
+  "about": "Answer key for optum diagnose on testco/company (the test company's own glue, with its n8n flows through the adapter): the planted waste. The n8n flow 'Orders to accounting' and nightly_sync.py do the same job (overlapping glue); vip_report.py copies clean_address and normalize_email from nightly_sync.py (duplicated logic). The unused 'Abandoned cart reminder' flow can't be seen from code (it's active and listening); it's left to the recorded traffic.",
+  "findings": [
+    {"kind": "overlapping_glue", "units": ["n8n:orders-to-accounting", "py:nightly_sync"], "targets": ["http:accounting.testco.internal:8069/jsonrpc", "http:shop.testco.internal:8080/wp-json/wc/v3/orders", "http:shop.testco.internal:8080/wp-json/wc/v3/orders/{}"]},
+    {"kind": "duplicated_logic", "units": ["py:nightly_sync", "py:vip_report"], "targets": ["py:nightly_sync.clean_address", "py:vip_report.clean_address"]},
+    {"kind": "duplicated_logic", "units": ["py:nightly_sync", "py:vip_report"], "targets": ["py:nightly_sync.normalize_email", "py:vip_report.normalize_email"]}
+  ]
+}

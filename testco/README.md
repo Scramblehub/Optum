@@ -65,3 +65,34 @@ python3 testco/check_regulated.py verify     # later: exit 1 if any tax document
 Why `check_regulated.py`: Odoo locks a posted invoice's partner and date, but its API still lets
 the total and line prices be overwritten. A tool's own locking isn't evidence that tax documents
 are untouched; a fingerprint before a stage and a comparison after are.
+
+## The company's glue
+
+`company/` is the company's own code, the glue Optum analyses and, in stage 1, replaces:
+
+| Part | Does |
+|---|---|
+| n8n flow "Orders to accounting" (every 5 minutes) | paid shop orders → an invoice in accounting (if none yet) → the order completed |
+| `nightly_sync.py` | the same job, written before the flow and never switched off |
+| `vip_report.py` | customers with five or more orders; copies two helpers from `nightly_sync.py` |
+| `payments_webhook.js` (container `hooks`) | a "charge succeeded" event → the shop order paid |
+| n8n flow "Abandoned cart reminder" | active, listening on a webhook nothing calls |
+
+All of it calls the tools by internal names (`shop.testco.internal`, `accounting.testco.internal`,
+...) that lead to the recording proxy, so every call is recorded and the same endpoint has the same
+id whether n8n, Python or JS calls it.
+
+```sh
+sh testco/company/setup_glue.sh                                        # import and switch on the n8n flows
+docker compose -f testco/compose.yaml exec company python /driver/business_day.py --orders 20   # a day of trading
+python3 testco/check_glue.py                                           # every new order: completed, one invoice
+```
+
+`driver/business_day.py` stands in for customers and Stripe (new orders, card charges, payment
+events); it's kept out of `company/` because it isn't the company's code.
+
+**What Optum finds** (`optum diagnose testco/company --adapter "python3 Core/adapters/n8n/optum_n8n.py"`,
+answer key [expected_diagnosis.json](expected_diagnosis.json), checked by a ctest): the flow and the
+nightly script doing the same job (overlapping glue: the same 3 endpoints), and the two copied
+helpers (duplicated logic). The unused cart flow can't be seen from code; that's for the recorded
+traffic.

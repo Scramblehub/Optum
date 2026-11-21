@@ -58,12 +58,13 @@ def main():
         json.dump(now, open(path, "w"), indent=0, sort_keys=True)
         print(f"fingerprinted {len(now)} posted invoices -> {path}")
         return
-    diff = compare(json.load(open(path)), now)
+    before = json.load(open(path))
+    diff = compare(before, now)
     if diff["changed"] or diff["missing"]:
         print(f"REGULATED RECORDS CHANGED: {len(diff['changed'])} changed {diff['changed'][:10]}, "
               f"{len(diff['missing'])} missing {diff['missing'][:10]}")
         sys.exit(1)
-    print(f"all {len(now)} posted invoices unchanged")
+    print(f"all {len(before)} fingerprinted invoices unchanged ({len(now) - len(before)} posted since the snapshot)")
 
 
 if __name__ == "__main__":
