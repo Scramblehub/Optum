@@ -98,10 +98,10 @@ nightly script doing the same job (overlapping glue: the same 3 endpoints), and 
 helpers (duplicated logic). The unused cart flow can't be seen from code; that's for the recorded
 traffic.
 
-## Learning the tools' behaviour (`feat/infer-spec`, rough)
+## Learning the tools' behaviour (`optum infer`)
 
 ```sh
-python3 Core/infer/infer_spec.py testco/recordings --n8n testco/company/n8n -o specs/
+optum infer testco/recordings --n8n testco/company/n8n -o specs/
 ```
 
 From the recordings alone it writes a behaviour spec per tool (`specs/<tool>.spec.json`,

@@ -30,7 +30,6 @@ ROOT = os.path.dirname(TESTCO)
 DATA = os.path.join(TESTCO, "data")
 STATE = os.path.join(DATA, "stage1")
 sys.path.insert(0, TESTCO)
-sys.path.insert(0, os.path.join(ROOT, "Core", "infer"))
 
 OLD_HOOK = "http://hooks.testco.internal:3000/stripe-events"
 OWNED_HOOK = "http://owned.testco.internal:7000/stripe-events"
@@ -80,27 +79,42 @@ def check_regulated():
     return r.returncode == 0, (r.stdout or r.stderr).strip()
 
 
+def optum_binary():
+    """The optum binary: $OPTUM, or the newest build under build/."""
+    if os.environ.get("OPTUM"):
+        return os.environ["OPTUM"]
+    import glob
+    found = [p for p in glob.glob(os.path.join(ROOT, "build", "*", "Core", "optum")) if os.access(p, os.X_OK)]
+    if not found:
+        sys.exit("stage1: no optum binary (build one: cmake --build --preset release, or set $OPTUM)")
+    return max(found, key=os.path.getmtime)
+
+
+def accounting_spec(*clients):
+    """What these clients do in accounting, learned from the recordings by `optum infer`."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as out:
+        args = [optum_binary(), "infer", os.path.join(TESTCO, "recordings"), "--tool", "accounting", "-q", "-o", out]
+        for c in clients:
+            args += ["--client", c]
+        subprocess.run(args, check=True, capture_output=True)
+        path = os.path.join(out, "accounting.spec.json")
+        return json.load(open(path))["operations"] if os.path.exists(path) else {}
+
+
 def check_contract():
     """The owned service calls accounting with the operations and invoice fields the old glue used."""
-    import collections
-    from infer_spec import learn
-    recs = collections.defaultdict(list)
-    path = os.path.join(TESTCO, "recordings", "accounting.jsonl")
-    for line in open(path):
-        r = json.loads(line)
-        if not r.get("harness"):
-            recs["owned" if r.get("client") == "owned" else "old" if r.get("client") in ("automation", "company") else "other"].append(r)
-    if not recs["owned"]:
+    new_ops = accounting_spec("owned")
+    if not new_ops:
         return True, "the owned service hasn't called accounting yet"
-    old_ops, _, _ = learn(recs["old"])
-    new_ops, _, _ = learn(recs["owned"])
+    old_ops = accounting_spec("automation", "company")
     READS = ("search", "search_read", "search_count", "read", "fields_get", "name_search")
     extra = set(new_ops) - set(old_ops) - {"rpc res.partner.create"}  # creating a missing customer: the script did too
     new_reads = sorted(op for op in extra if op.rsplit(".", 1)[-1] in READS)  # reading more changes nothing
     extra = sorted(extra - set(new_reads))
     create = "rpc account.move.create"
-    fields_old = set(old_ops.get(create, {}).get("request", {}))
-    fields_new = set(new_ops.get(create, {}).get("request", {}))
+    fields_old = set(old_ops.get(create, {}).get("request_fields", {}))
+    fields_new = set(new_ops.get(create, {}).get("request_fields", {}))
     problems = []
     if extra:
         problems.append(f"writes the old glue never made: {extra}")

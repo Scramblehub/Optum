@@ -3,6 +3,7 @@ add_executable(optum_tests
   test_ir.cpp
   test_ir_json.cpp
   test_score.cpp
+  test_infer.cpp
   test_python_frontend.cpp
   test_sql_http.cpp
   test_deep_nesting.cpp
@@ -217,7 +218,7 @@ set_tests_properties(cli_diagnose_markdown PROPERTIES PASS_REGULAR_EXPRESSION "#
 if(Python3_FOUND)
   add_test(NAME testco_generator COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_testco_data.py)
   add_test(NAME testco_observe_records COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_observe.py)
-  add_test(NAME infer_spec COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_infer_spec.py)
+  add_test(NAME infer_spec COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_infer_spec.py $<TARGET_FILE:optum>)
   # The test company's glue: optum diagnose finds its planted waste (static: no Docker needed).
   add_test(NAME testco_diagnose_glue
            COMMAND sh -c "$<TARGET_FILE:optum> diagnose ${CMAKE_SOURCE_DIR}/testco/company -q -f json -o ${CMAKE_CURRENT_BINARY_DIR}/testco_glue.json --adapter '${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/Core/adapters/n8n/optum_n8n.py' && ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_diagnosis.py ${CMAKE_CURRENT_BINARY_DIR}/testco_glue.json ${CMAKE_SOURCE_DIR}/testco/expected_diagnosis.json")

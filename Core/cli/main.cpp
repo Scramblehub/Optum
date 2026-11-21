@@ -11,6 +11,7 @@
 #include "optum/export.hpp"
 #include "optum/frontend.hpp"
 #include "optum/frontends/binary.hpp"
+#include "optum/infer.hpp"
 #include "optum/ir.hpp"
 #include "optum/score.hpp"
 #include "optum/syntax_tree.hpp"
@@ -331,6 +332,21 @@ int main(int argc, char** argv) {
   verify_cmd->add_flag("--json", verify_json, "Print the report as JSON");
   verify_cmd->add_option("--min-recall", verify_min_recall, "Fail (exit 1) below this recall, 0-1");
 
+  optum::InferOptions infer_opts;
+  std::string infer_out;
+  std::vector<std::string> infer_tools, infer_clients;
+  auto* infer_cmd = app.add_subcommand("infer", "Learn each tool's behaviour from recorded traffic (a spec per tool)");
+  infer_cmd->footer(
+      "Example: optum infer testco/recordings --n8n testco/company/n8n -o specs/\n"
+      "Writes <tool>.spec.json and spec.md per tool, and observed.json (automation flows that never ran).\n"
+      "Recordings: JSON lines from the recording proxy (testco/observe); harness calls are left out.");
+  infer_cmd->add_option("recordings", infer_opts.recordings, "Folder of <tool>.jsonl recordings")->required();
+  infer_cmd->add_option("--n8n", infer_opts.n8n, "Folder of the automation tool's exported flows");
+  infer_cmd->add_option("--tool", infer_tools, "Only this tool (repeatable)");
+  infer_cmd->add_option("--client", infer_clients, "Only calls made by this client (repeatable)");
+  infer_cmd->add_option("-o,--out", infer_out, "Output folder")->required();
+  infer_cmd->add_flag("-q,--quiet", quiet, "Don't print the summary to stderr");
+
   std::string disasm_path;
   auto* disasm_cmd = app.add_subcommand("disasm", "Research aid: an ELF binary's functions and instructions, as JSON");
   disasm_cmd->add_option("binary", disasm_path, "x86-64 ELF executable or shared library")->required();
@@ -351,6 +367,22 @@ int main(int argc, char** argv) {
       view_options(view);  // fail on a bad --edges before the (possibly long) analysis
       const optum::Graph g = build_graph(path, adapters, threads, adapter_timeout, quiet);
       return emit(g, view, out_path, indent);
+    }
+    if (*infer_cmd) {
+      infer_opts.tools.insert(infer_tools.begin(), infer_tools.end());
+      infer_opts.clients.insert(infer_clients.begin(), infer_clients.end());
+      if (!infer_opts.n8n.empty()) require_exists(infer_opts.n8n.string(), "folder");
+      const auto r = optum::infer(infer_opts);
+      std::filesystem::create_directories(infer_out);
+      const std::filesystem::path out(infer_out);
+      for (const auto& [tool, spec] : r.specs) write_text(spec.dump(1) + "\n", (out / (tool + ".spec.json")).string());
+      write_text(r.observed.dump(1) + "\n", (out / "observed.json").string());
+      write_text(r.markdown, (out / "spec.md").string());
+      if (!quiet) {
+        std::cerr << r.specs.size() << " tools, " << r.calls << " calls -> " << infer_out << "; "
+                  << r.observed["findings"].size() << " observed finding(s)\n";
+      }
+      return 0;
     }
     if (*disasm_cmd) {
       require_exists(disasm_path, "file");
