@@ -1,0 +1,12 @@
+{
+ "about": "The answer key for optum model on the test company's code (testco/company) with the fixture recordings and testco/deployment.json. Stage 1 showed the n8n flow really could be replaced (testco/README.md).",
+ "components": {
+  "js:payments_webhook.js": "essential",
+  "n8n:abandoned-cart-reminder": "independently_removable",
+  "n8n:orders-to-accounting": "independently_removable",
+  "py:nightly_sync": "independently_removable",
+  "py:common": "not_a_component",
+  "py:vip_report": "unknown"
+ },
+ "systems": {"accounting": "essential", "shop": "unknown"}
+}

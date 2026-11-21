@@ -6,6 +6,7 @@
 // Input: the recording proxy's JSON lines (testco/observe/record.py), one file per tool.
 
 #include <filesystem>
+#include <map>
 #include <nlohmann/json.hpp>
 #include <set>
 #include <string>
@@ -18,9 +19,10 @@ namespace optum {
 std::string template_path(std::string_view path);
 
 // A spec for one tool from its recordings (harness records must already be left out): operations
-// (method and endpoint, or a JSON-RPC model and method) with calls, clients, statuses, fields sent
-// and received; resources and their fields; and status changes per resource. Key order is kept
-// (operations by calls, most first), so the output reads the same every run.
+// (method and endpoint, or a JSON-RPC model and method) with calls, clients, statuses, the
+// endpoint, the status values it sets, fields sent and received; resources and their fields; and
+// status changes per resource. Key order is kept (operations by calls, most first), so the output
+// reads the same every run.
 nlohmann::ordered_json learn_spec(const std::vector<nlohmann::json>& records);
 
 struct InferOptions {
@@ -36,6 +38,10 @@ struct InferResult {
   std::string markdown;             // the specs, for people
   std::size_t calls = 0, harness = 0;
 };
+
+// The recordings by tool, harness calls left out (counted in *harness) and the filters applied.
+std::map<std::string, std::vector<nlohmann::json>> load_recordings(const InferOptions& opts,
+                                                                   std::size_t* harness = nullptr);
 
 // Reads every recording, leaves out Optum's own harness calls, and learns a spec per tool.
 // Throws IrError on unreadable files or malformed lines (with the file and line number).
