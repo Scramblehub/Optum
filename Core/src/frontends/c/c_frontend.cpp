@@ -102,6 +102,59 @@ struct ModuleInfo {
   std::unordered_map<std::string, std::optional<std::string>> flags;
 };
 
+// A /* comment */ in the middle of a #define (in a continued body, or with more text after it)
+// makes the parser lose the macro body and the lines after it. Blank those comments out, keeping
+// every byte offset and line: a comment that spans lines becomes a backslash-continued stretch of
+// spaces. Comments after the whole directive, and in other directives, parse fine and stay.
+void blank_directive_comments(std::string& s) {
+  bool directive = false, define = false, continued = false, line_start = true;
+  for (std::size_t i = 0; i < s.size(); ++i) {
+    const char c = s[i];
+    if (c == '\n') {
+      const bool cont = i > 0 && (s[i - 1] == '\\' || (s[i - 1] == '\r' && i > 1 && s[i - 2] == '\\'));
+      if (!cont) directive = define = continued = false;
+      else continued = true;
+      line_start = true;
+      continue;
+    }
+    if (line_start && (c == ' ' || c == '\t')) continue;
+    if (line_start && c == '#') {
+      directive = true;
+      std::size_t k = i + 1;
+      while (k < s.size() && (s[k] == ' ' || s[k] == '\t')) ++k;
+      define = s.compare(k, 6, "define") == 0;
+    }
+    line_start = false;
+    if (c == '"' || c == '\'') {  // string / char literal: no comments in it
+      for (++i; i < s.size() && s[i] != c && s[i] != '\n'; ++i) {
+        if (s[i] == '\\' && i + 1 < s.size() && s[i + 1] != '\n') ++i;
+      }
+      if (i < s.size() && s[i] == '\n') --i;
+    } else if (c == '/' && i + 1 < s.size() && s[i + 1] == '/') {
+      while (i < s.size() && (s[i] != '\n' || s[i - 1] == '\\')) ++i;
+      if (i < s.size()) --i;
+    } else if (c == '/' && i + 1 < s.size() && s[i + 1] == '*') {
+      const std::size_t end = s.find("*/", i + 2);
+      const std::size_t stop = end == std::string::npos ? s.size() : end + 2;
+      if (define) {
+        // What follows the comment on its line: nothing, a backslash, or more of the macro?
+        std::size_t k = stop;
+        while (k < s.size() && (s[k] == ' ' || s[k] == '\t' || s[k] == '\r')) ++k;
+        const bool spans = s.find('\n', i) < stop;
+        const bool more = k < s.size() && s[k] != '\n';  // includes a continuation backslash
+        if (continued || spans || more) {
+          for (std::size_t j = i; j < stop; ++j) {
+            if (s[j] == '\n') s[j - 1] = '\\';
+            else if (s[j] != '\r') s[j] = ' ';
+          }
+          if (spans) continued = true;
+        }
+      }
+      i = stop - 1;
+    }
+  }
+}
+
 // ===================================================================== pass 1
 
 class Summarizer {
@@ -122,6 +175,7 @@ class Summarizer {
   // The identifier a declarator declares, through pointers, arrays, parentheses and functions.
   TSNode declared(TSNode d) const {
     while (!ts_node_is_null(d) && !ts::is(d, "identifier")) {
+      if (const TSNode name = parenthesised_name(d); !ts_node_is_null(name)) return name;
       if (ts::is(d, "parenthesized_declarator")) d = ts_node_named_child(d, 0);
       else {
         const TSNode inner = ts::field(d, "declarator");
@@ -130,6 +184,30 @@ class Summarizer {
       }
     }
     return d;
+  }
+
+  // `LUA_API int (lua_settop) (lua_State *L, int idx)` after an unknown macro reads as a function
+  // `int` taking one parameter of type `lua_settop`, called with the real parameters. The name is
+  // that "type": `(NAME)` with nothing else in it, behind a function declarator.
+  static TSNode parenthesised_name(TSNode d) {
+    if (!ts::is(d, "function_declarator")) return TSNode{};
+    // `LUALIB_API lua_Integer luaL_len (...)`: two macros/types before the name; the parser takes the
+    // first as the declarator and the name as a stray identifier before the parameters.
+    TSNode stray{};
+    ts::for_named(d, [&](TSNode c) {
+      if (ts::is(c, "ERROR") && ts_node_named_child_count(c) == 1 && ts::is(ts_node_named_child(c, 0), "identifier")) {
+        stray = ts_node_named_child(c, 0);
+      }
+    });
+    if (!ts_node_is_null(stray) && ts::is(ts::field(d, "declarator"), "identifier")) return stray;
+    const TSNode inner = ts::field(d, "declarator");
+    if (!ts::is(inner, "function_declarator") || !ts::is(ts::field(inner, "declarator"), "identifier")) return TSNode{};
+    const TSNode params = ts::field(inner, "parameters");
+    if (ts_node_is_null(params) || ts_node_named_child_count(params) != 1) return TSNode{};
+    const TSNode p = ts_node_named_child(params, 0);
+    if (!ts::is(p, "parameter_declaration") || !ts_node_is_null(ts::field(p, "declarator"))) return TSNode{};
+    const TSNode type = ts::field(p, "type");
+    return ts::is(type, "type_identifier") ? type : TSNode{};
   }
 
   TSNode function_declarator(TSNode d) const {
@@ -146,6 +224,20 @@ class Summarizer {
     return s;
   }
 
+  // An identifier on a directive line (`#ifdef NAME` inside an initializer list, which the parser
+  // reads as an expression: `{ #ifdef NAME "x", ...`) is a condition's name, not a value.
+  bool on_directive_line(TSNode n) const {
+    std::size_t i = ts_node_start_byte(n);
+    while (i > 0 && src_[i - 1] != '\n') --i;
+    // A backslash-continued directive: its first line.
+    while (i >= 2 && (src_[i - 2] == '\\' || (i >= 3 && src_[i - 2] == '\r' && src_[i - 3] == '\\'))) {
+      i -= src_[i - 2] == '\r' ? 3 : 2;
+      while (i > 0 && src_[i - 1] != '\n') --i;
+    }
+    while (i < src_.size() && (src_[i] == ' ' || src_[i] == '\t')) ++i;
+    return i < src_.size() && src_[i] == '#';
+  }
+
   void walk(TSNode n, int f) {
     const frontends::DepthGuard guard(depth_);
     if (guard.too_deep()) return;
@@ -153,6 +245,7 @@ class Summarizer {
     if (t == "function_definition") return on_function(n, f);
     if (t == "declaration") return on_declaration(n, f);
     if (t == "call_expression") return on_call(n, f);
+    if (t == "ERROR" && f < 0) on_misparsed_prototype(n);
     if (t == "preproc_include") return on_include(n);
     if (t == "preproc_def") return on_define(n);
     if (t == "preproc_function_def") return on_macro(n);
@@ -162,7 +255,7 @@ class Summarizer {
       return on_conditional(n, f);
     }
     if (t == "identifier") {
-      m_.address_taken.insert(text(n));  // a name used as a value (filtered to functions later)
+      if (!on_directive_line(n)) m_.address_taken.insert(text(n));  // a name used as a value (filtered to functions later)
       return;
     }
     if (t == "parameter_list" || t == "type_definition" ||
@@ -176,6 +269,14 @@ class Summarizer {
     const TSNode decl = ts::field(n, "declarator");
     const TSNode fd = function_declarator(decl);
     const TSNode id = declared(decl);
+    // `vmcase(OP_X) { ... }` in a function body is a statement macro with a block, read as a
+    // definition: `NAME` is its "type" and `(args)` its whole declarator. Its body is the enclosing one's.
+    TSNode top = decl;
+    while (ts::is(top, "pointer_declarator")) top = ts::field(top, "declarator");
+    if (f >= 0 && ts::is(top, "parenthesized_declarator")) {
+      walk(ts::field(n, "body"), f);
+      return;
+    }
     if (ts_node_is_null(id)) return;
     static const std::unordered_set<std::string> kKeywords = {
         "if", "else", "while", "for", "do", "switch", "case", "return", "sizeof", "goto", "break", "continue",
@@ -208,6 +309,16 @@ class Summarizer {
     m_.funcs.push_back(std::move(fn));
     const int idx = static_cast<int>(m_.funcs.size()) - 1;
     walk(ts::field(n, "body"), idx);
+  }
+
+  // `int f(x) ATTR((warn_unused_result));` at file scope: the trailing attribute macro makes the
+  // parser give up on the declaration, but the function declarator in it is intact.
+  void on_misparsed_prototype(TSNode n) {
+    ts::for_named(n, [&](TSNode c) {
+      if (!ts::is(c, "function_declarator")) return;
+      const TSNode id = declared(c);
+      if (!ts_node_is_null(id)) m_.prototypes.insert(text(id));
+    });
   }
 
   void on_declaration(TSNode n, int f) {
@@ -463,7 +574,6 @@ class Project {
       if (!mod.path.ends_with(".c")) {
         for (const auto& [name, d] : mod.defs) defined_in_header_.insert(name);
       }
-      used_in_code_.insert(mod.address_taken.begin(), mod.address_taken.end());  // every name used as a value
     }
     // Resolved includes, then each file's headers seen through includes of includes.
     includes_.resize(mods.size());
@@ -588,7 +698,15 @@ class Project {
     return out;
   }
   bool defined_in_header(const std::string& name) const { return defined_in_header_.count(name) > 0; }
-  bool used_in_code(const std::string& name) const { return used_in_code_.count(name) > 0; }
+  // Module m, or a header it sees, uses `name` as a value (a file outside this translation unit, like
+  // a test program that prints config names, says nothing about where the name comes from).
+  bool used_in_code(int m, const std::string& name) const {
+    if (mods[std::size_t(m)].address_taken.count(name)) return true;
+    for (int h : visible_[std::size_t(m)]) {
+      if (mods[std::size_t(h)].address_taken.count(name)) return true;
+    }
+    return false;
+  }
   // Module m, or a header it sees, includes <header>.
   bool sees_system_header(int m, const std::string& header) const {
     auto has = [&](int mod) {
@@ -640,7 +758,7 @@ class Project {
  private:
   std::unordered_map<std::string, int> by_path_;
   std::unordered_map<std::string, std::vector<FnRef>> globals_;
-  std::unordered_set<std::string> defined_in_header_, used_in_code_;
+  std::unordered_set<std::string> defined_in_header_;
   std::vector<std::vector<int>> includes_, visible_;
   std::vector<FnRef> address_taken_;
 };
@@ -783,7 +901,7 @@ class Config {
     if (defs.empty()) {
       if (const auto known = host(n)) r = *known;
       else if (const char* h = std_header(n)) r = p_.sees_system_header(ctx, h) ? Tri::True : Tri::Unknown;
-      else if (p_.defined_in_header(n) || p_.used_in_code(n)) r = Tri::Unknown;  // in a header we don't see, or a system one
+      else if (p_.defined_in_header(n) || p_.used_in_code(ctx, n)) r = Tri::Unknown;  // in a header we don't see, or a system one
     } else {
       busy_.push_back(n);
       assumed_.push_back(n);
@@ -1189,7 +1307,8 @@ Graph extract_c_files(const fs::path& root, const std::vector<fs::path>& rel_fil
     ModuleInfo& m = project.mods[i];
     m.path = files[i].generic_string();
     bool readable = true;
-    const std::string src = read_file(root / files[i], &readable);
+    std::string src = read_file(root / files[i], &readable);
+    blank_directive_comments(src);
     m.unreadable = !readable;
     m.lines = static_cast<std::size_t>(std::count(src.begin(), src.end(), '\n'));
     ts::TreePtr tree(ts_parser_parse_string(parser.get(), nullptr, src.data(), static_cast<uint32_t>(src.size())));

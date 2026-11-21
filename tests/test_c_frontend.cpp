@@ -183,3 +183,154 @@ TEST_CASE("c: compile_commands.json gives the -D / -U flags of each file") {
   CHECK(confidence("c:src/a.c#g") == Confidence::Inferred);
   CHECK(confidence("c:src/a.c#h") == Confidence::Exact);
 }
+
+TEST_CASE("c: a prototype or definition with a parenthesised name is that function") {
+  TempDir dir;
+  dir.write("api.h",
+            "LUA_API int (lua_settop) (lua_State *L, int idx);\n"
+            "LUA_API const char *(lua_tolstring) (lua_State *L, int idx);\n"
+            "#define lua_pop(L,n) lua_settop(L, -(n)-1)\n");
+  dir.write("api.c",
+            "#include \"api.h\"\n"
+            "LUALIB_API lua_Integer (luaL_len) (lua_State *L, int idx) { return 0; }\n"
+            "LUALIB_API lua_Unsigned lua_rawlen (lua_State *L, int idx) { return 0; }\n"
+            "LUA_API int (lua_settop) (lua_State *L, int idx) { return 0; }\n"
+            "void use(lua_State *L) { lua_settop(L, 0); luaL_len(L, 1); lua_rawlen(L, 1); lua_pop(L, 1); }\n");
+  const optum::Graph g = optum::extract_c_files(dir.path, {"api.h", "api.c"});
+  const optum::Edge* settop = find_call(g, "c:api.c#use", "c:api.c#lua_settop");
+  REQUIRE(settop);
+  CHECK(settop->confidence == optum::Confidence::Exact);
+  const optum::Edge* len = find_call(g, "c:api.c#use", "c:api.c#luaL_len");  // not a function named lua_Integer
+  REQUIRE(len);
+  CHECK(len->confidence == optum::Confidence::Exact);
+  CHECK(find_call(g, "c:api.c#use", "c:api.c#lua_rawlen"));  // `API Type name (...)`, not a function named lua_Unsigned
+}
+
+TEST_CASE("c: NAME(args) { } inside a function body is not a function definition") {
+  TempDir dir;
+  dir.write("vm.c",
+            "void op_a(void) {}\n"
+            "void op_b(void) {}\n"
+            "int run(int i) {\n"
+            "  vmdispatch(GET_OPCODE(i)) {\n"
+            "    vmcase(OP_A) { op_a(); vmbreak; }\n"
+            "    vmcase(OP_B) { op_b(); vmbreak; }\n"
+            "  }\n"
+            "  return 0;\n"
+            "}\n");
+  const optum::Graph g = optum::extract_c_files(dir.path, {"vm.c"});
+  CHECK(find_call(g, "c:vm.c#run", "c:vm.c#op_a"));
+  CHECK(find_call(g, "c:vm.c#run", "c:vm.c#op_b"));
+  for (const optum::Node& n : g.nodes()) {
+    CHECK(n.name != "OP_A");
+    CHECK(n.name != "vmdispatch");
+  }
+}
+
+TEST_CASE("c: a prototype followed by an attribute macro with double parentheses is still a prototype") {
+  TempDir dir;
+  dir.write("h.h",
+            "int table_init(table_t *t) TABLE_ATTRS((warn_unused_result));\n"
+            "void table_close(table_t *t) TABLE_ATTRS((nonnull));\n");
+  dir.write("t.c", "#include \"h.h\"\nint table_init(table_t *t) { return 0; }\nvoid table_close(table_t *t) {}\n");
+  dir.write("u.c", "#include \"h.h\"\nvoid use(table_t *t) { table_init(t); table_close(t); }\n");
+  const optum::Graph g = optum::extract_c_files(dir.path, {"h.h", "t.c", "u.c"});
+  for (const char* to : {"c:t.c#table_init", "c:t.c#table_close"}) {
+    const optum::Edge* e = find_call(g, "c:u.c#use", to);
+    REQUIRE(e);
+    CHECK(e->confidence == optum::Confidence::Exact);
+  }
+}
+
+TEST_CASE("c: a comment in a backslash-continued macro body doesn't hide its calls") {
+  TempDir dir;
+  dir.write("m.c",
+            "void grow(void) {}\n"
+            "void push(void) {}\n"
+            "#define check(L, n) \\\n"
+            "  if ((n) > 1) { grow(); /* may move the stack */ } \\\n"
+            "  else { (void)0; }\n"
+            "#define PUSH(L) \\\n"
+            "  /* multi\n"
+            "     line */ push()\n"
+            "void run(int *L) { check(L, 2); PUSH(L); }\n");
+  const optum::Graph g = optum::extract_c_files(dir.path, {"m.c"});
+  CHECK(find_call(g, "c:m.c#run", "c:m.c#grow"));
+  CHECK(find_call(g, "c:m.c#run", "c:m.c#push"));
+}
+
+TEST_CASE("c: #ifdef lines inside an initializer list don't make their names values") {
+  TempDir dir;
+  dir.write("o.c",
+            "static const char *const opts[] = {\n"
+            "#ifdef FEATURE_ZED\n"
+            "  \"ZED\",\n"
+            "#endif\n"
+            "  \"end\"\n"
+            "};\n"
+            "void zed(void) {}\n"
+            "void run(void) {\n"
+            "#ifdef FEATURE_ZED\n"
+            "  zed();\n"
+            "#endif\n"
+            "}\n");
+  const optum::Graph g = optum::extract_c_files(dir.path, {"o.c"});
+  const optum::Edge* e = find_call(g, "c:o.c#run", "c:o.c#zed");
+  REQUIRE(e);
+  CHECK(e->confidence == optum::Confidence::Inferred);  // nobody defines FEATURE_ZED: off in this build
+  CHECK(e->attrs.value("inactive", false));
+}
+
+TEST_CASE("c: a name another translation unit uses as a value doesn't make this file's #if unknown") {
+  TempDir dir;
+  // query.c prints config names (a value use of CFG_ZED); it isn't part of lib.c's build.
+  dir.write("query.c", "int show(int x);\nint query(void) { return show(CFG_ZED); }\n");
+  dir.write("lib.c",
+            "void zed(void) {}\n"
+            "void run(void) {\n"
+            "#if defined(CFG_ZED)\n"
+            "  zed();\n"
+            "#endif\n"
+            "}\n");
+  dir.write("own.c",  // a value use in the same file: CFG_ZED may come from a system header
+            "void zed2(void) {}\n"
+            "int v(void) { return CFG_ZED; }\n"
+            "void run2(void) {\n"
+            "#if defined(CFG_ZED)\n"
+            "  zed2();\n"
+            "#endif\n"
+            "}\n");
+  const optum::Graph g = optum::extract_c_files(dir.path, {"query.c", "lib.c", "own.c"});
+  const optum::Edge* off = find_call(g, "c:lib.c#run", "c:lib.c#zed");
+  REQUIRE(off);
+  CHECK(off->confidence == optum::Confidence::Inferred);
+  CHECK(off->attrs.value("inactive", false));
+  const optum::Edge* unknown = find_call(g, "c:own.c#run2", "c:own.c#zed2");
+  REQUIRE(unknown);
+  CHECK(unknown->confidence == optum::Confidence::Exact);
+}
+
+TEST_CASE("c: names on the continuation line of a #if are conditions, not values") {
+  TempDir dir;
+  // Cut from the sqlite amalgamation: the parser reads the second line of the #if as code.
+  dir.write("o.c",
+            "#if !defined(SQLITE_CORE) \\\n"
+            "  || (defined(SQLITE_ENABLE_RTREE) && !defined(SQLITE_OMIT_VIRTUALTABLE))\n"
+            "\n"
+            "#ifndef SQLITE_CORE\n"
+            "/*   #include \"sqlite3ext.h\" */\n"
+            "  SQLITE_EXTENSION_INIT1\n"
+            "#else\n"
+            "/*   #include \"sqlite3.h\" */\n"
+            "void zed(void) {}\n"
+            "void run(void) {\n"
+            "#if defined(SQLITE_OMIT_VIRTUALTABLE)\n"
+            "  zed();\n"
+            "#endif\n"
+            "}\n");
+  const optum::Graph g = optum::extract_c_files(dir.path, {"o.c"});
+  const optum::Edge* e = find_call(g, "c:o.c#run", "c:o.c#zed");
+  REQUIRE(e);
+  CHECK(e->confidence == optum::Confidence::Inferred);
+  CHECK(e->attrs.value("inactive", false));
+}
