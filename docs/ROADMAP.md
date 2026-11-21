@@ -143,6 +143,10 @@ This is the "test company" from section 11 of the concept doc, kept small, and m
 reconciles exactly, and the before/after simplicity numbers from section 3.4 of the concept doc
 are reported.
 
+**Alongside Phase 3:** the builder's suite (what a UI builder needs from what Optum learned) and
+Optum's console (graphs and monitoring around the architect's questions):
+[plans/builders-suite.md](plans/builders-suite.md).
+
 ## Later improvements (backlog)
 
 From Phase 2:
