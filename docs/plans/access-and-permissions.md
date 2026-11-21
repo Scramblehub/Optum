@@ -132,7 +132,7 @@ company would never grant.
   can be recorded, and what your data-protection officer needs first.
 - **Approvals: agreed.** One approver per switch; two for anything touching regulated systems;
   fallback never waits for approval.
-- **Certifications (SOC 2, ISO 27001): deferred.** They certify Optum as a vendor (its access
+- **Certifications (SOC 2, ISO 27001): deferred until Optum is a full product.** They certify Optum as a vendor (its access
   control, change review, incident handling), not the product, and take months and real money.
   Not needed for first pilots, and much more pressing if Optum hosts customers' data. Meanwhile
   the audit log, the per-phase access plan, reviewed changes through CI, and deletion with proof
