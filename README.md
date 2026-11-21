@@ -45,6 +45,8 @@ Commands:
 | `optum merge <files...> [-o out.json]` | Merge graphs by node id |
 | `optum score <expected> <produced>` | Precision and recall of a produced graph against a hand-checked one |
 | `optum verify <graph.json> <trace.json>` | How many calls observed at runtime the graph has ([docs/verify.md](docs/verify.md)) |
+| `optum infer <recordings> [--n8n flows] -o out/` | Each tool's behaviour learned from recorded traffic: operations, callers, fields, status changes; automation flows that never ran ([testco/README.md](testco/README.md)) |
+| `optum model <dir> --deployment d.json [--recordings r/] [--n8n flows/]` | What each component does to which data, and whether it could go: a class (removable, essential, unknown...) with its reasons, evidence and confidence; `--check model.json` lists conclusions whose inputs changed ([docs/plans/capabilities.md](docs/plans/capabilities.md)) |
 
 Both `graph` and `export` take view options (`--level module`, `--focus <node>`, `--edges calls,reads`,
 `--no-inferred`); see [docs/diagrams.md](docs/diagrams.md).

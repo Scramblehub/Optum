@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""infer_spec.py on hand-made recordings: operations, callers, fields, status changes, harness
-calls left out, and a webhook flow nobody called."""
+"""optum infer on hand-made recordings: operations, callers, fields, status changes, harness
+calls left out, a webhook flow nobody called, and the --tool / --client filters.
+
+    check_infer_spec.py OPTUM_BINARY"""
 import json, os, subprocess, sys, tempfile
 
-ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
-TOOL = os.path.join(ROOT, "Core", "infer", "infer_spec.py")
+OPTUM = sys.argv[1]
 
 
 def rec(tool, method, path, client, req=None, resp=None, status=200, t="2026-11-20T10:00:00.000Z", harness=None):
@@ -37,8 +38,13 @@ with tempfile.TemporaryDirectory() as d:
             f.writelines(json.dumps(r) + "\n" for r in recs if r["tool"] == tool)
     json.dump({"id": "cart", "name": "Cart reminder", "nodes": [{"name": "Hook", "type": "n8n-nodes-base.webhook",
               "parameters": {"httpMethod": "POST", "path": "abandoned"}}]}, open(os.path.join(d, "n8n", "cart.json"), "w"))
-    subprocess.run([sys.executable, TOOL, os.path.join(d, "rec"), "--n8n", os.path.join(d, "n8n"), "-o", os.path.join(d, "out")],
+    subprocess.run([OPTUM, "infer", os.path.join(d, "rec"), "--n8n", os.path.join(d, "n8n"), "-o", os.path.join(d, "out")],
                    check=True, capture_output=True)
+    # Filters: one tool, one client (the stage harness's contract check splits traffic this way).
+    subprocess.run([OPTUM, "infer", os.path.join(d, "rec"), "--tool", "shop", "--client", "hooks", "-q",
+                    "-o", os.path.join(d, "hooks")], check=True, capture_output=True)
+    hooks_only = sorted(os.listdir(os.path.join(d, "hooks")))
+    hooks_shop = json.load(open(os.path.join(d, "hooks", "shop.spec.json")))
     shop = json.load(open(os.path.join(d, "out", "shop.spec.json")))
     acc = json.load(open(os.path.join(d, "out", "accounting.spec.json")))
     observed = json.load(open(os.path.join(d, "out", "observed.json")))
@@ -51,4 +57,6 @@ assert shop["status_changes"] == {"orders": {"pending -> processing": 1, "proces
 assert set(acc["operations"]) == {"rpc account.move.create", "rpc account.move.search_count"}
 assert "invoice_line_ids" in acc["resources"]["account.move"] and "ref" in acc["resources"]["account.move"]
 assert [f["flow"] for f in observed["findings"]] == ["n8n:cart"] and observed["findings"][0]["kind"] == "never_triggered"
-print("infer_spec: operations, callers, fields, status changes, harness left out, an unused flow found")
+assert hooks_only == ["observed.json", "shop.spec.json", "spec.md"], hooks_only
+assert set(hooks_shop["operations"]) == {"PUT /api/orders/{}"} and hooks_shop["operations"]["PUT /api/orders/{}"]["clients"] == {"hooks": 1}
+print("optum infer: operations, callers, fields, status changes, harness left out, an unused flow found, filters")
